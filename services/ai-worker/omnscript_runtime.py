@@ -52,7 +52,7 @@ def validate_script(source: str) -> ValidationResult:
     return ValidationResult(not errors, errors)
 
 
-def _execute_child(source: str, context: dict[str, Any], output: mp.Queue) -> None:
+def _execute_child(source: str, context: dict[str, Any], output: Any) -> None:
     validation = validate_script(source)
     if not validation.valid:
         output.put({"ok": False, "errors": validation.errors})
@@ -93,8 +93,9 @@ def _execute_child(source: str, context: dict[str, Any], output: mp.Queue) -> No
 
 
 def execute_script(source: str, context: dict[str, Any], timeout_seconds: float = 2.0) -> dict[str, Any]:
-    result_queue: mp.Queue = mp.Queue(maxsize=1)
-    process = mp.Process(target=_execute_child, args=(source, context, result_queue), daemon=True)
+    process_context = mp.get_context("spawn")
+    result_queue = process_context.Queue(maxsize=1)
+    process = process_context.Process(target=_execute_child, args=(source, context, result_queue), daemon=True)
     process.start()
     process.join(max(0.1, min(timeout_seconds, 10.0)))
     if process.is_alive():
