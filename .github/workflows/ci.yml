@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  native-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DOMNISTEM_BUILD_JUCE_APP=OFF
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Smoke test
+        run: ./build/apps/desktop/OmniStemCLI
+
+  python-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile
+        run: python -m compileall services/ai-worker
+      - name: Protocol smoke test
+        run: echo '{"id":"ci","method":"health.check","params":{}}' | python services/ai-worker/main.py
