@@ -3,17 +3,52 @@
 
 namespace {
 
-class TimelineView final : public juce::Component {
+class TimelineView final : public juce::Component,
+                           private juce::ChangeListener {
 public:
+    explicit TimelineView(juce::AudioFormatManager& formatManager)
+        : thumbnailCache(8), thumbnail(512, formatManager, thumbnailCache) {
+        thumbnail.addChangeListener(this);
+    }
+
+    ~TimelineView() override {
+        thumbnail.removeChangeListener(this);
+    }
+
+    void setFile(const juce::File& file) {
+        thumbnail.setSource(new juce::FileInputSource(file));
+    }
+
+    void clear() {
+        thumbnail.clear();
+        repaint();
+    }
+
     void paint(juce::Graphics& g) override {
         g.fillAll(juce::Colour::fromRGB(18, 20, 27));
         g.setColour(juce::Colour::fromRGB(48, 54, 70));
-        for (int x = 0; x < getWidth(); x += 80) g.drawVerticalLine(x, 0.0f, static_cast<float>(getHeight()));
-        g.setColour(juce::Colour::fromRGB(87, 202, 255));
-        g.fillRoundedRectangle(50.0f, 40.0f, static_cast<float>(getWidth() - 100), 54.0f, 8.0f);
+        for (int x = 0; x < getWidth(); x += 80)
+            g.drawVerticalLine(x, 0.0f, static_cast<float>(getHeight()));
+
+        const auto waveformBounds = getLocalBounds().reduced(18).withTrimmedTop(26);
+        if (thumbnail.getTotalLength() > 0.0) {
+            g.setColour(juce::Colour::fromRGB(87, 202, 255));
+            thumbnail.drawChannels(g, waveformBounds, 0.0, thumbnail.getTotalLength(), 1.0f);
+        } else {
+            g.setColour(juce::Colours::white.withAlpha(0.55f));
+            g.drawFittedText("Import an audio file to display its waveform",
+                             waveformBounds, juce::Justification::centred, 1);
+        }
+
         g.setColour(juce::Colours::white);
-        g.drawText("Waveform / stem lanes", getLocalBounds().reduced(12), juce::Justification::topLeft);
+        g.drawText("Waveform / stem timeline", getLocalBounds().reduced(12), juce::Justification::topLeft);
     }
+
+private:
+    void changeListenerCallback(juce::ChangeBroadcaster*) override { repaint(); }
+
+    juce::AudioThumbnailCache thumbnailCache;
+    juce::AudioThumbnail thumbnail;
 };
 
 class SpectralView final : public juce::Component {
@@ -25,7 +60,8 @@ public:
         g.setGradientFill(gradient);
         g.fillAll();
         g.setColour(juce::Colours::white.withAlpha(0.85f));
-        g.drawText("Spectral correction canvas", getLocalBounds().reduced(12), juce::Justification::topLeft);
+        g.drawText("Spectral correction canvas — rendering is performed by the worker",
+                   getLocalBounds().reduced(12), juce::Justification::topLeft);
     }
 };
 
@@ -49,36 +85,51 @@ class MainComponent final : public juce::AudioAppComponent,
                             private juce::Button::Listener,
                             private juce::ChangeListener {
 public:
-    MainComponent() : tabs(juce::TabbedButtonBar::TabsAtTop) {
+    MainComponent()
+        : deadMansPedalFile(juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+                               .getChildFile("OmniStemStudio")
+                               .getChildFile("plugin-scan-dead-man.txt")),
+          pluginList(pluginFormats, knownPlugins, deadMansPedalFile, nullptr, true),
+          timeline(formatManager),
+          tabs(juce::TabbedButtonBar::TabsAtTop) {
         formatManager.registerBasicFormats();
         pluginFormats.addDefaultFormats();
+        deadMansPedalFile.getParentDirectory().createDirectory();
+        pluginList.setNumberOfThreadsForScanning(2);
+        pluginList.setOptionsButtonText("Scan / manage plugins");
 
         addAndMakeVisible(importButton);
         addAndMakeVisible(playButton);
         addAndMakeVisible(stopButton);
+        addAndMakeVisible(deviceButton);
         addAndMakeVisible(statusLabel);
         addAndMakeVisible(tabs);
 
         importButton.setButtonText("Import Audio");
         playButton.setButtonText("Play");
         stopButton.setButtonText("Stop");
-        statusLabel.setText("Ready — ASIO/WASAPI device engine", juce::dontSendNotification);
+        deviceButton.setButtonText("Audio Device");
+        statusLabel.setText("Ready — WASAPI enabled; ASIO is an opt-in build option", juce::dontSendNotification);
 
         importButton.addListener(this);
         playButton.addListener(this);
         stopButton.addListener(this);
+        deviceButton.addListener(this);
         transport.addChangeListener(this);
 
         tabs.addTab("Timeline", juce::Colour::fromRGB(30, 34, 44), &timeline, false);
         tabs.addTab("Spectral", juce::Colour::fromRGB(30, 34, 44), &spectral, false);
         tabs.addTab("Notes / MIDI", juce::Colour::fromRGB(30, 34, 44), &notes, false);
+        tabs.addTab("Plugins", juce::Colour::fromRGB(30, 34, 44), &pluginList, false);
 
         setAudioChannels(0, 2);
         setSize(1280, 800);
     }
 
     ~MainComponent() override {
+        transport.stop();
         transport.setSource(nullptr);
+        readerSource.reset();
         shutdownAudio();
     }
 
@@ -98,6 +149,7 @@ public:
         importButton.setBounds(controls.removeFromLeft(130).reduced(2));
         playButton.setBounds(controls.removeFromLeft(80).reduced(2));
         stopButton.setBounds(controls.removeFromLeft(80).reduced(2));
+        deviceButton.setBounds(controls.removeFromLeft(120).reduced(2));
         statusLabel.setBounds(controls.reduced(8, 2));
         tabs.setBounds(area.reduced(0, 8));
     }
@@ -105,14 +157,20 @@ public:
 private:
     void buttonClicked(juce::Button* button) override {
         if (button == &importButton) {
-            chooser = std::make_unique<juce::FileChooser>("Import WAV, AIFF, FLAC, MP3 or OGG", juce::File{}, "*.wav;*.aiff;*.aif;*.flac;*.mp3;*.ogg");
-            chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                [this](const juce::FileChooser& selected) { loadFile(selected.getResult()); });
+            chooser = std::make_unique<juce::FileChooser>(
+                "Import WAV, AIFF, FLAC, MP3 or OGG", juce::File{}, "*.wav;*.aiff;*.aif;*.flac;*.mp3;*.ogg");
+            chooser->launchAsync(
+                juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                [safeThis = juce::Component::SafePointer<MainComponent>(this)](const juce::FileChooser& selected) {
+                    if (safeThis != nullptr) safeThis->loadFile(selected.getResult());
+                });
         } else if (button == &playButton) {
-            transport.start();
+            if (readerSource) transport.start();
         } else if (button == &stopButton) {
             transport.stop();
             transport.setPosition(0.0);
+        } else if (button == &deviceButton) {
+            showAudioDeviceDialog();
         }
     }
 
@@ -120,29 +178,56 @@ private:
         statusLabel.setText(transport.isPlaying() ? "Playing" : "Stopped", juce::dontSendNotification);
     }
 
-    void loadFile(const juce::File& file) {
-        if (!file.existsAsFile()) return;
-        if (auto* reader = formatManager.createReaderFor(file)) {
-            readerSource = std::make_unique<juce::AudioFormatReaderSource>(reader, true);
-            transport.setSource(readerSource.get(), 0, nullptr, reader->sampleRate);
-            statusLabel.setText("Loaded: " + file.getFileName(), juce::dontSendNotification);
-        } else {
-            statusLabel.setText("Unsupported or unreadable audio file", juce::dontSendNotification);
-        }
+    void showAudioDeviceDialog() {
+        auto selector = std::make_unique<juce::AudioDeviceSelectorComponent>(
+            deviceManager, 0, 0, 1, 2, true, true, true, false);
+        selector->setSize(520, 430);
+
+        juce::DialogWindow::LaunchOptions options;
+        options.content.setOwned(selector.release());
+        options.dialogTitle = "OmniStem Audio Device";
+        options.dialogBackgroundColour = juce::Colour::fromRGB(25, 28, 36);
+        options.escapeKeyTriggersCloseButton = true;
+        options.useNativeTitleBar = true;
+        options.resizable = true;
+        options.launchAsync();
     }
 
-    juce::TextButton importButton, playButton, stopButton;
+    void loadFile(const juce::File& file) {
+        if (!file.existsAsFile()) return;
+
+        std::unique_ptr<juce::AudioFormatReader> reader(formatManager.createReaderFor(file));
+        if (!reader) {
+            statusLabel.setText("Unsupported or unreadable audio file", juce::dontSendNotification);
+            return;
+        }
+
+        const auto sampleRate = reader->sampleRate;
+        auto nextSource = std::make_unique<juce::AudioFormatReaderSource>(reader.release(), true);
+
+        transport.stop();
+        transport.setSource(nullptr);
+        readerSource.reset();
+        readerSource = std::move(nextSource);
+        transport.setSource(readerSource.get(), 0, nullptr, sampleRate);
+        timeline.setFile(file);
+        statusLabel.setText("Loaded: " + file.getFileName(), juce::dontSendNotification);
+    }
+
+    juce::TextButton importButton, playButton, stopButton, deviceButton;
     juce::Label statusLabel;
-    juce::TabbedComponent tabs;
+    juce::AudioFormatManager formatManager;
+    juce::AudioPluginFormatManager pluginFormats;
+    juce::KnownPluginList knownPlugins;
+    juce::File deadMansPedalFile;
+    juce::PluginListComponent pluginList;
     TimelineView timeline;
     SpectralView spectral;
     NoteEditorView notes;
-    juce::AudioFormatManager formatManager;
+    juce::TabbedComponent tabs;
     juce::AudioTransportSource transport;
     std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
     std::unique_ptr<juce::FileChooser> chooser;
-    juce::AudioPluginFormatManager pluginFormats;
-    juce::KnownPluginList knownPlugins;
 };
 
 class MainWindow final : public juce::DocumentWindow {
@@ -154,7 +239,10 @@ public:
         centreWithSize(getWidth(), getHeight());
         setVisible(true);
     }
-    void closeButtonPressed() override { juce::JUCEApplication::getInstance()->systemRequestedQuit(); }
+
+    void closeButtonPressed() override {
+        juce::JUCEApplication::getInstance()->systemRequestedQuit();
+    }
 };
 
 class OmniStemApplication final : public juce::JUCEApplication {
@@ -165,6 +253,7 @@ public:
     void initialise(const juce::String&) override { window = std::make_unique<MainWindow>(); }
     void shutdown() override { window.reset(); }
     void systemRequestedQuit() override { quit(); }
+
 private:
     std::unique_ptr<MainWindow> window;
 };
