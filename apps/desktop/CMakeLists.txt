@@ -32,7 +32,7 @@ if(OMNISTEM_BUILD_JUCE_APP)
     target_compile_definitions(OmniStemStudio PRIVATE
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
-        JUCE_ASIO=1
         JUCE_WASAPI=1
+        JUCE_ASIO=$<BOOL:${OMNISTEM_ENABLE_ASIO}>
     )
 endif()
