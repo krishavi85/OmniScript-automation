@@ -1,0 +1,7 @@
+# Optional local DSP/model integrations. Install PyTorch/Torchaudio using the
+# package source appropriate for your CPU or CUDA version before this file.
+numpy>=1.26
+soundfile>=0.12
+onnxruntime>=1.18
+demucs>=4.0.1
+basic-pitch>=0.3
