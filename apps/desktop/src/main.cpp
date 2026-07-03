@@ -1,79 +1,64 @@
-#include <algorithm>
+#include "omnistem/core/OmniStemCore.h"
+
+#include <chrono>
+#include <filesystem>
 #include <iostream>
-#include <string>
-#include <vector>
-
-namespace omnistem {
-
-struct PitchPoint {
-    double timeSeconds{};
-    double midiNote{};
-};
-
-struct NoteEvent {
-    std::string id;
-    std::string stemId;
-    double startSeconds{};
-    double durationSeconds{};
-    double gainDb{};
-    double pan{};
-    double confidence{};
-    bool muted{};
-    std::vector<PitchPoint> pitchCurve;
-};
-
-class EditCommand {
-public:
-    virtual ~EditCommand() = default;
-    virtual void apply(NoteEvent& note) = 0;
-    virtual void undo(NoteEvent& note) = 0;
-};
-
-class SetGainCommand final : public EditCommand {
-public:
-    explicit SetGainCommand(double requestedGainDb)
-        : requestedGainDb_(std::clamp(requestedGainDb, -120.0, 24.0)) {}
-
-    void apply(NoteEvent& note) override {
-        previousGainDb_ = note.gainDb;
-        note.gainDb = requestedGainDb_;
-    }
-
-    void undo(NoteEvent& note) override {
-        note.gainDb = previousGainDb_;
-    }
-
-private:
-    double requestedGainDb_{};
-    double previousGainDb_{};
-};
-
-} // namespace omnistem
+#include <thread>
 
 int main() {
     using namespace omnistem;
 
-    NoteEvent note{
+    Project project;
+    project.id = "demo-project";
+    project.name = "OmniStem Demo";
+    project.stems.push_back({"lead-vocal", "Lead Vocal", StemRole::leadVocal, "lead-vocal.wav"});
+    project.notes.push_back({
         .id = "note-0001",
         .stemId = "lead-vocal",
-        .startSeconds = 12.4,
-        .durationSeconds = 0.82,
+        .startSeconds = 0.25,
+        .durationSeconds = 0.75,
         .gainDb = 0.0,
         .pan = 0.0,
+        .formantSemitones = 0.0,
         .confidence = 0.93,
         .muted = false,
-        .pitchCurve = {{0.0, 64.0}, {0.41, 64.18}, {0.82, 64.0}}
-    };
+        .pitchCurve = {{0.0, 64.0}, {0.35, 64.18}, {0.75, 64.0}},
+        .gainEnvelope = {},
+    });
+    project.masks.push_back({"mask-1", "other", "lead-vocal", 1.0, 1.5, 250.0, 3500.0, -12.0, 0.2});
+    project.processingGraph = ProcessingGraphFactory::restorationChain();
+    const auto mastering = ProcessingGraphFactory::masteringChain();
+    project.processingGraph.insert(project.processingGraph.end(), mastering.begin(), mastering.end());
 
-    SetGainCommand lowerGain{-3.0};
-    lowerGain.apply(note);
+    SetNoteGainCommand lowerGain{"note-0001", -3.0};
+    lowerGain.apply(project);
+    lowerGain.undo(project);
 
-    std::cout << "OmniStem Desktop " << OMNISTEM_VERSION << '\n'
-              << "Non-destructive note event: " << note.id << '\n'
-              << "Stem: " << note.stemId << '\n'
-              << "Gain after command: " << note.gainDb << " dB\n";
+    std::string error;
+    const auto midiPath = std::filesystem::current_path() / "omnistem-demo.mid";
+    const bool midiWritten = MidiWriter::writeType1(midiPath, project.notes, 120.0, 480, error);
 
-    lowerGain.undo(note);
-    std::cout << "Gain after undo: " << note.gainDb << " dB\n";
-    return 0;
+    ProjectRepository repository(std::filesystem::current_path() / "omnistem-demo.sqlite");
+    const bool stored = repository.isAvailable() && repository.open(error) && repository.save(project, error);
+
+    JobManager jobs{1};
+    jobs.submit({"job-demo", "analysis", "Build waveform and spectrogram caches"},
+        [](const std::atomic_bool& cancelled, const JobManager::ProgressCallback& progress) {
+            for (int step = 1; step <= 5 && !cancelled.load(); ++step) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                progress(step / 5.0, "analysis tile " + std::to_string(step));
+            }
+        });
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    const auto job = jobs.snapshot("job-demo");
+
+    std::cout << "OmniStem Studio core " << OMNISTEM_VERSION << '\n'
+              << "Stems: " << project.stems.size() << ", notes: " << project.notes.size() << '\n'
+              << "MIDI: " << (midiWritten ? midiPath.string() : error) << '\n'
+              << "Persistence: " << (stored ? "SQLite project saved" : "SQLite optional/not available") << '\n'
+              << "Job: " << (job ? toString(job->state) : "missing") << '\n'
+              << "AI request: " << AiRequestBuilder::separation("song.wav", "ensemble", {"vocals", "drums", "bass", "other"}) << '\n';
+
+    jobs.shutdown();
+    return midiWritten ? 0 : 1;
 }
