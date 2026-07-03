@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <map>
 #include <optional>
 #include <string>
@@ -113,33 +112,6 @@ public:
 
 private:
     std::vector<PluginState> plugins_;
-};
-
-class WavFloatRecorder {
-public:
-    WavFloatRecorder() = default;
-    ~WavFloatRecorder();
-    WavFloatRecorder(const WavFloatRecorder&) = delete;
-    WavFloatRecorder& operator=(const WavFloatRecorder&) = delete;
-
-    bool open(const std::filesystem::path& path,
-              std::uint32_t sampleRate,
-              std::uint16_t channels,
-              std::string& error);
-    bool appendInterleaved(const float* samples,
-                           std::size_t frameCount,
-                           std::string& error);
-    bool close(std::string& error);
-    bool isOpen() const noexcept;
-    std::uint64_t framesWritten() const noexcept;
-
-private:
-    void writeHeader(std::uint32_t dataBytes);
-
-    std::fstream stream_;
-    std::uint32_t sampleRate_{};
-    std::uint16_t channels_{};
-    std::uint64_t framesWritten_{};
 };
 
 } // namespace omnistem::daw
