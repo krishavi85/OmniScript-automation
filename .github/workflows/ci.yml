@@ -29,7 +29,11 @@ jobs:
         run: cmake -S . -B build -DOMNISTEM_BUILD_JUCE_APP=OFF
       - name: Build
         run: cmake --build build --config Release --parallel
-      - name: Native tests
+      - name: Core tests
+        run: .\build\packages\core\Release\OmniStemCoreTests.exe
+      - name: DAW system tests
+        run: .\build\packages\core\Release\OmniStemDawTests.exe
+      - name: CTest registry
         run: ctest --test-dir build -C Release --output-on-failure
       - name: CLI smoke test
         run: .\build\apps\desktop\Release\OmniStemCLI.exe
