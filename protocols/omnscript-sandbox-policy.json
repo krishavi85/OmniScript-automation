@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "platform": "windows",
+  "isolation": "AppContainer",
+  "network": "disabled",
+  "capabilities": [],
+  "workspace": {
+    "access": "read-write",
+    "outsideWorkspace": "deny"
+  },
+  "process": {
+    "childProcesses": "deny",
+    "maximumMemoryBytes": 536870912,
+    "maximumCpuTimeMs": 10000,
+    "killOnJobClose": true,
+    "timeoutMs": 5000
+  },
+  "mitigations": [
+    "DEP",
+    "ASLR",
+    "strictHandleChecks",
+    "extensionPointDisable",
+    "dynamicCodeDisable",
+    "win32kSystemCallDisable"
+  ],
+  "environmentAllowlist": [
+    "PATH",
+    "PYTHONUTF8",
+    "OMNISTEM_SANDBOX_REQUEST",
+    "OMNISTEM_SANDBOX_RESPONSE"
+  ],
+  "failClosed": true
+}
