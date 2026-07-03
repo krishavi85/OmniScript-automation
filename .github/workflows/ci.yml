@@ -48,6 +48,18 @@ jobs:
       - name: Protocol smoke test
         run: echo '{"id":"ci","method":"health.check","params":{}}' | python services/ai-worker/main.py
 
+  python-dsp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install DSP dependencies
+        run: python -m pip install "numpy>=1.26,<3" "soundfile>=0.12,<1"
+      - name: Run worker and DSP tests
+        run: python -m unittest discover -s services/ai-worker/tests -v
+
   juce-windows:
     runs-on: windows-latest
     steps:
