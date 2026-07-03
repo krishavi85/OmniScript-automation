@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import argparse
+import json
 from pathlib import Path
 from typing import Any
 
@@ -18,3 +20,23 @@ def export_png_tiles(manifest: dict[str, Any]) -> dict[str, Any]:
         tile["pngPath"] = str(destination)
     manifest["imageStorage"] = "8-bit-grayscale-png"
     return manifest
+
+
+def convert_manifest(manifest_path: Path) -> dict[str, Any]:
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    converted = export_png_tiles(manifest)
+    manifest_path.write_text(json.dumps(converted, indent=2), encoding="utf-8")
+    return converted
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Export OmniStem spectrogram tiles as PNG images")
+    parser.add_argument("manifest", type=Path)
+    args = parser.parse_args()
+    result = convert_manifest(args.manifest.resolve())
+    print(json.dumps({"manifest": str(args.manifest), "tileCount": len(result.get("tiles", []))}))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
