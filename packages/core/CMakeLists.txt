@@ -16,3 +16,7 @@ if(MSVC)
 else()
     target_compile_options(OmniStemCore PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+add_executable(OmniStemCoreTests tests/CoreTests.cpp)
+target_link_libraries(OmniStemCoreTests PRIVATE OmniStemCore)
+add_test(NAME OmniStemCoreTests COMMAND OmniStemCoreTests)
