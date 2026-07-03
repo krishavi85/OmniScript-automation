@@ -25,8 +25,14 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install SQLite
+        run: vcpkg install sqlite3:x64-windows
       - name: Configure
-        run: cmake -S . -B build -DOMNISTEM_BUILD_JUCE_APP=OFF
+        run: >-
+          cmake -S . -B build
+          -DOMNISTEM_BUILD_JUCE_APP=OFF
+          -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+          -DVCPKG_TARGET_TRIPLET=x64-windows
       - name: Build
         run: cmake --build build --config Release --parallel
       - name: Core tests
