@@ -4,8 +4,11 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
-  native-core:
+  native-linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -13,8 +16,23 @@ jobs:
         run: cmake -S . -B build -DOMNISTEM_BUILD_JUCE_APP=OFF
       - name: Build
         run: cmake --build build --config Release --parallel
-      - name: Smoke test
+      - name: Native tests
+        run: ctest --test-dir build --output-on-failure
+      - name: CLI smoke test
         run: ./build/apps/desktop/OmniStemCLI
+
+  native-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DOMNISTEM_BUILD_JUCE_APP=OFF
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Native tests
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: CLI smoke test
+        run: .\build\apps\desktop\Release\OmniStemCLI.exe
 
   python-worker:
     runs-on: ubuntu-latest
@@ -25,5 +43,28 @@ jobs:
           python-version: "3.11"
       - name: Compile
         run: python -m compileall services/ai-worker
+      - name: Unit tests
+        run: python -m unittest discover -s services/ai-worker/tests -v
       - name: Protocol smoke test
         run: echo '{"id":"ci","method":"health.check","params":{}}' | python services/ai-worker/main.py
+
+  juce-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: juce-framework/JUCE
+          path: external/JUCE
+          fetch-depth: 1
+      - name: Configure JUCE application
+        shell: pwsh
+        run: >-
+          cmake -S . -B build-juce
+          -DOMNISTEM_BUILD_JUCE_APP=ON
+          -DOMNISTEM_ENABLE_ASIO=OFF
+          -DOMNISTEM_JUCE_SOURCE_DIR="${{ github.workspace }}/external/JUCE"
+          -DJUCE_BUILD_EXAMPLES=OFF
+          -DJUCE_BUILD_EXTRAS=OFF
+      - name: Build JUCE application
+        run: cmake --build build-juce --config Release --target OmniStemStudio --parallel
