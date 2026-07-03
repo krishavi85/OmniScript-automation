@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 
 #if OMNISTEM_HAS_SQLITE
@@ -62,6 +63,36 @@ std::vector<PitchPoint> parsePitch(const std::string& text) {
     return result;
 }
 
+StemRole stemRoleFromString(const std::string& role) {
+    if (role == "lead-vocal") return StemRole::leadVocal;
+    if (role == "backing-vocal") return StemRole::backingVocal;
+    if (role == "drums") return StemRole::drums;
+    if (role == "bass") return StemRole::bass;
+    if (role == "guitar") return StemRole::guitar;
+    if (role == "piano") return StemRole::piano;
+    if (role == "strings") return StemRole::strings;
+    if (role == "synth") return StemRole::synth;
+    if (role == "effects") return StemRole::effects;
+    return StemRole::other;
+}
+
+std::string processorKindToString(ProcessorKind kind) {
+    switch (kind) {
+        case ProcessorKind::restoration: return "restoration";
+        case ProcessorKind::mastering: return "mastering";
+        case ProcessorKind::replacement: return "replacement";
+        case ProcessorKind::plugin: return "plugin";
+    }
+    return "plugin";
+}
+
+ProcessorKind processorKindFromString(const std::string& kind) {
+    if (kind == "restoration") return ProcessorKind::restoration;
+    if (kind == "mastering") return ProcessorKind::mastering;
+    if (kind == "replacement") return ProcessorKind::replacement;
+    return ProcessorKind::plugin;
+}
+
 void appendBe16(std::vector<std::uint8_t>& data, std::uint16_t value) {
     data.push_back(static_cast<std::uint8_t>((value >> 8) & 0xff));
     data.push_back(static_cast<std::uint8_t>(value & 0xff));
@@ -88,6 +119,19 @@ void appendVarLen(std::vector<std::uint8_t>& data, std::uint32_t value) {
 }
 
 #if OMNISTEM_HAS_SQLITE
+
+class Statement {
+public:
+    Statement() = default;
+    ~Statement() { if (value_) sqlite3_finalize(value_); }
+    Statement(const Statement&) = delete;
+    Statement& operator=(const Statement&) = delete;
+    sqlite3_stmt** out() { return &value_; }
+    sqlite3_stmt* get() const { return value_; }
+private:
+    sqlite3_stmt* value_{};
+};
+
 bool execSql(sqlite3* db, const char* sql, std::string& error) {
     char* rawError = nullptr;
     if (sqlite3_exec(db, sql, nullptr, nullptr, &rawError) != SQLITE_OK) {
@@ -98,9 +142,66 @@ bool execSql(sqlite3* db, const char* sql, std::string& error) {
     return true;
 }
 
+bool prepare(sqlite3* db, const char* sql, Statement& statement, std::string& error) {
+    if (sqlite3_prepare_v2(db, sql, -1, statement.out(), nullptr) == SQLITE_OK) return true;
+    error = sqlite3_errmsg(db);
+    return false;
+}
+
 bool bindText(sqlite3_stmt* statement, int index, const std::string& value) {
     return sqlite3_bind_text(statement, index, value.c_str(), -1, SQLITE_TRANSIENT) == SQLITE_OK;
 }
+
+std::string columnText(sqlite3_stmt* statement, int index) {
+    const auto* text = sqlite3_column_text(statement, index);
+    return text ? reinterpret_cast<const char*>(text) : std::string{};
+}
+
+bool tableExists(sqlite3* db, const std::string& tableName, std::string& error) {
+    Statement statement;
+    if (!prepare(db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?;", statement, error)) return false;
+    if (!bindText(statement.get(), 1, tableName)) {
+        error = sqlite3_errmsg(db);
+        return false;
+    }
+    return sqlite3_step(statement.get()) == SQLITE_ROW;
+}
+
+class Transaction {
+public:
+    Transaction(sqlite3* db, std::string& error) : db_(db), active_(execSql(db_, "BEGIN IMMEDIATE;", error)) {}
+    ~Transaction() { if (active_) { std::string ignored; execSql(db_, "ROLLBACK;", ignored); } }
+    bool active() const { return active_; }
+    bool commit(std::string& error) {
+        if (!active_) return false;
+        if (!execSql(db_, "COMMIT;", error)) return false;
+        active_ = false;
+        return true;
+    }
+private:
+    sqlite3* db_{};
+    bool active_{};
+};
+
+bool migrateLegacyTables(sqlite3* db, std::string& error) {
+    if (tableExists(db, "stems", error)) {
+        if (!execSql(db,
+            "INSERT OR IGNORE INTO project_stems(project_id,id,name,role,audio_path,gain_db,pan,muted,solo) "
+            "SELECT project_id,id,name,role,audio_path,gain_db,pan,muted,solo FROM stems;", error)) return false;
+    }
+    if (tableExists(db, "notes", error)) {
+        if (!execSql(db,
+            "INSERT OR IGNORE INTO project_notes(project_id,id,stem_id,start_seconds,duration_seconds,gain_db,pan,formant,confidence,muted,pitch_curve) "
+            "SELECT project_id,id,stem_id,start_seconds,duration_seconds,gain_db,pan,formant,confidence,muted,pitch_curve FROM notes;", error)) return false;
+    }
+    if (tableExists(db, "spectral_masks", error)) {
+        if (!execSql(db,
+            "INSERT OR IGNORE INTO project_masks(project_id,id,source_stem_id,destination_stem_id,start_seconds,end_seconds,low_hz,high_hz,gain_db,feather) "
+            "SELECT project_id,id,source_stem_id,destination_stem_id,start_seconds,end_seconds,low_hz,high_hz,gain_db,feather FROM spectral_masks;", error)) return false;
+    }
+    return true;
+}
+
 #endif
 
 } // namespace
@@ -123,7 +224,7 @@ void SetNoteGainCommand::undo(Project& project) {
 }
 
 struct ProjectRepository::Impl {
-    explicit Impl(std::filesystem::path path) : path(std::move(path)) {}
+    explicit Impl(std::filesystem::path databasePath) : path(std::move(databasePath)) {}
     std::filesystem::path path;
 #if OMNISTEM_HAS_SQLITE
     sqlite3* db{};
@@ -143,36 +244,89 @@ bool ProjectRepository::open(std::string& error) {
 #if OMNISTEM_HAS_SQLITE
     if (impl_->db) return true;
     if (sqlite3_open(impl_->path.string().c_str(), &impl_->db) != SQLITE_OK) {
-        error = sqlite3_errmsg(impl_->db);
+        error = impl_->db ? sqlite3_errmsg(impl_->db) : "Unable to open SQLite database";
         return false;
     }
     constexpr const char* schema = R"SQL(
         PRAGMA foreign_keys=ON;
         CREATE TABLE IF NOT EXISTS projects(
-            id TEXT PRIMARY KEY, name TEXT NOT NULL, sample_rate REAL NOT NULL
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            sample_rate REAL NOT NULL
         );
-        CREATE TABLE IF NOT EXISTS stems(
-            id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL,
-            role TEXT NOT NULL, audio_path TEXT NOT NULL, gain_db REAL NOT NULL,
-            pan REAL NOT NULL, muted INTEGER NOT NULL, solo INTEGER NOT NULL,
+        CREATE TABLE IF NOT EXISTS project_stems(
+            project_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            role TEXT NOT NULL,
+            audio_path TEXT NOT NULL,
+            gain_db REAL NOT NULL,
+            pan REAL NOT NULL,
+            muted INTEGER NOT NULL,
+            solo INTEGER NOT NULL,
+            PRIMARY KEY(project_id,id),
             FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
         );
-        CREATE TABLE IF NOT EXISTS notes(
-            id TEXT PRIMARY KEY, project_id TEXT NOT NULL, stem_id TEXT NOT NULL,
-            start_seconds REAL NOT NULL, duration_seconds REAL NOT NULL,
-            gain_db REAL NOT NULL, pan REAL NOT NULL, formant REAL NOT NULL,
-            confidence REAL NOT NULL, muted INTEGER NOT NULL, pitch_curve TEXT NOT NULL,
+        CREATE TABLE IF NOT EXISTS project_notes(
+            project_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            stem_id TEXT NOT NULL,
+            start_seconds REAL NOT NULL,
+            duration_seconds REAL NOT NULL,
+            gain_db REAL NOT NULL,
+            pan REAL NOT NULL,
+            formant REAL NOT NULL,
+            confidence REAL NOT NULL,
+            muted INTEGER NOT NULL,
+            pitch_curve TEXT NOT NULL,
+            PRIMARY KEY(project_id,id),
             FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
         );
-        CREATE TABLE IF NOT EXISTS spectral_masks(
-            id TEXT PRIMARY KEY, project_id TEXT NOT NULL, source_stem_id TEXT NOT NULL,
-            destination_stem_id TEXT NOT NULL, start_seconds REAL NOT NULL,
-            end_seconds REAL NOT NULL, low_hz REAL NOT NULL, high_hz REAL NOT NULL,
-            gain_db REAL NOT NULL, feather REAL NOT NULL,
+        CREATE TABLE IF NOT EXISTS note_gain_envelopes(
+            project_id TEXT NOT NULL,
+            note_id TEXT NOT NULL,
+            point_index INTEGER NOT NULL,
+            time_seconds REAL NOT NULL,
+            value REAL NOT NULL,
+            PRIMARY KEY(project_id,note_id,point_index),
+            FOREIGN KEY(project_id,note_id) REFERENCES project_notes(project_id,id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS project_masks(
+            project_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            source_stem_id TEXT NOT NULL,
+            destination_stem_id TEXT NOT NULL,
+            start_seconds REAL NOT NULL,
+            end_seconds REAL NOT NULL,
+            low_hz REAL NOT NULL,
+            high_hz REAL NOT NULL,
+            gain_db REAL NOT NULL,
+            feather REAL NOT NULL,
+            PRIMARY KEY(project_id,id),
             FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS project_processors(
+            project_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            enabled INTEGER NOT NULL,
+            position INTEGER NOT NULL,
+            PRIMARY KEY(project_id,id),
+            FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS processor_parameters(
+            project_id TEXT NOT NULL,
+            processor_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            value REAL NOT NULL,
+            PRIMARY KEY(project_id,processor_id,name),
+            FOREIGN KEY(project_id,processor_id) REFERENCES project_processors(project_id,id) ON DELETE CASCADE
+        );
+        PRAGMA user_version=2;
     )SQL";
-    return execSql(impl_->db, schema, error);
+    if (!execSql(impl_->db, schema, error)) return false;
+    return migrateLegacyTables(impl_->db, error);
 #else
     error = "SQLite3 was not found when OmniStemCore was built";
     return false;
@@ -181,66 +335,143 @@ bool ProjectRepository::open(std::string& error) {
 
 bool ProjectRepository::save(const Project& project, std::string& error) {
 #if OMNISTEM_HAS_SQLITE
+    if (project.id.empty()) {
+        error = "Project ID must not be empty";
+        return false;
+    }
     if (!impl_->db && !open(error)) return false;
-    if (!execSql(impl_->db, "BEGIN IMMEDIATE;", error)) return false;
-    auto rollback = [&] { std::string ignored; execSql(impl_->db, "ROLLBACK;", ignored); };
+    Transaction transaction(impl_->db, error);
+    if (!transaction.active()) return false;
 
-    sqlite3_stmt* statement{};
-    const char* upsertProject = "INSERT INTO projects(id,name,sample_rate) VALUES(?,?,?) "
-                                "ON CONFLICT(id) DO UPDATE SET name=excluded.name,sample_rate=excluded.sample_rate;";
-    if (sqlite3_prepare_v2(impl_->db, upsertProject, -1, &statement, nullptr) != SQLITE_OK ||
-        !bindText(statement, 1, project.id) || !bindText(statement, 2, project.name) ||
-        sqlite3_bind_double(statement, 3, project.sampleRate) != SQLITE_OK ||
-        sqlite3_step(statement) != SQLITE_DONE) {
-        error = sqlite3_errmsg(impl_->db); sqlite3_finalize(statement); rollback(); return false;
-    }
-    sqlite3_finalize(statement);
-
-    for (const char* table : {"stems", "notes", "spectral_masks"}) {
-        const std::string sql = std::string("DELETE FROM ") + table + " WHERE project_id=?;";
-        if (sqlite3_prepare_v2(impl_->db, sql.c_str(), -1, &statement, nullptr) != SQLITE_OK ||
-            !bindText(statement, 1, project.id) || sqlite3_step(statement) != SQLITE_DONE) {
-            error = sqlite3_errmsg(impl_->db); sqlite3_finalize(statement); rollback(); return false;
+    {
+        Statement statement;
+        if (!prepare(impl_->db,
+            "INSERT INTO projects(id,name,sample_rate) VALUES(?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET name=excluded.name,sample_rate=excluded.sample_rate;",
+            statement, error)) return false;
+        if (!bindText(statement.get(), 1, project.id) ||
+            !bindText(statement.get(), 2, project.name) ||
+            sqlite3_bind_double(statement.get(), 3, project.sampleRate) != SQLITE_OK ||
+            sqlite3_step(statement.get()) != SQLITE_DONE) {
+            error = sqlite3_errmsg(impl_->db);
+            return false;
         }
-        sqlite3_finalize(statement);
     }
 
-    const char* insertStem = "INSERT INTO stems VALUES(?,?,?,?,?,?,?,?,?);";
+    for (const char* table : {"processor_parameters", "note_gain_envelopes", "project_processors", "project_masks", "project_notes", "project_stems"}) {
+        const std::string sql = std::string("DELETE FROM ") + table + " WHERE project_id=?;";
+        Statement statement;
+        if (!prepare(impl_->db, sql.c_str(), statement, error) ||
+            !bindText(statement.get(), 1, project.id) ||
+            sqlite3_step(statement.get()) != SQLITE_DONE) {
+            if (error.empty()) error = sqlite3_errmsg(impl_->db);
+            return false;
+        }
+    }
+
     for (const auto& stem : project.stems) {
-        if (sqlite3_prepare_v2(impl_->db, insertStem, -1, &statement, nullptr) != SQLITE_OK) { rollback(); return false; }
-        bindText(statement, 1, stem.id); bindText(statement, 2, project.id); bindText(statement, 3, stem.name);
-        bindText(statement, 4, toString(stem.role)); bindText(statement, 5, stem.audioPath.string());
-        sqlite3_bind_double(statement, 6, stem.gainDb); sqlite3_bind_double(statement, 7, stem.pan);
-        sqlite3_bind_int(statement, 8, stem.muted ? 1 : 0); sqlite3_bind_int(statement, 9, stem.solo ? 1 : 0);
-        if (sqlite3_step(statement) != SQLITE_DONE) { error = sqlite3_errmsg(impl_->db); sqlite3_finalize(statement); rollback(); return false; }
-        sqlite3_finalize(statement);
+        Statement statement;
+        if (!prepare(impl_->db,
+            "INSERT INTO project_stems(project_id,id,name,role,audio_path,gain_db,pan,muted,solo) VALUES(?,?,?,?,?,?,?,?,?);",
+            statement, error)) return false;
+        if (!bindText(statement.get(), 1, project.id) || !bindText(statement.get(), 2, stem.id) ||
+            !bindText(statement.get(), 3, stem.name) || !bindText(statement.get(), 4, toString(stem.role)) ||
+            !bindText(statement.get(), 5, stem.audioPath.string()) ||
+            sqlite3_bind_double(statement.get(), 6, stem.gainDb) != SQLITE_OK ||
+            sqlite3_bind_double(statement.get(), 7, stem.pan) != SQLITE_OK ||
+            sqlite3_bind_int(statement.get(), 8, stem.muted ? 1 : 0) != SQLITE_OK ||
+            sqlite3_bind_int(statement.get(), 9, stem.solo ? 1 : 0) != SQLITE_OK ||
+            sqlite3_step(statement.get()) != SQLITE_DONE) {
+            error = sqlite3_errmsg(impl_->db);
+            return false;
+        }
     }
 
-    const char* insertNote = "INSERT INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?);";
     for (const auto& note : project.notes) {
-        if (sqlite3_prepare_v2(impl_->db, insertNote, -1, &statement, nullptr) != SQLITE_OK) { rollback(); return false; }
-        bindText(statement, 1, note.id); bindText(statement, 2, project.id); bindText(statement, 3, note.stemId);
-        sqlite3_bind_double(statement, 4, note.startSeconds); sqlite3_bind_double(statement, 5, note.durationSeconds);
-        sqlite3_bind_double(statement, 6, note.gainDb); sqlite3_bind_double(statement, 7, note.pan);
-        sqlite3_bind_double(statement, 8, note.formantSemitones); sqlite3_bind_double(statement, 9, note.confidence);
-        sqlite3_bind_int(statement, 10, note.muted ? 1 : 0); bindText(statement, 11, serializePitch(note.pitchCurve));
-        if (sqlite3_step(statement) != SQLITE_DONE) { error = sqlite3_errmsg(impl_->db); sqlite3_finalize(statement); rollback(); return false; }
-        sqlite3_finalize(statement);
+        Statement statement;
+        if (!prepare(impl_->db,
+            "INSERT INTO project_notes(project_id,id,stem_id,start_seconds,duration_seconds,gain_db,pan,formant,confidence,muted,pitch_curve) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?);", statement, error)) return false;
+        if (!bindText(statement.get(), 1, project.id) || !bindText(statement.get(), 2, note.id) ||
+            !bindText(statement.get(), 3, note.stemId) ||
+            sqlite3_bind_double(statement.get(), 4, note.startSeconds) != SQLITE_OK ||
+            sqlite3_bind_double(statement.get(), 5, note.durationSeconds) != SQLITE_OK ||
+            sqlite3_bind_double(statement.get(), 6, note.gainDb) != SQLITE_OK ||
+            sqlite3_bind_double(statement.get(), 7, note.pan) != SQLITE_OK ||
+            sqlite3_bind_double(statement.get(), 8, note.formantSemitones) != SQLITE_OK ||
+            sqlite3_bind_double(statement.get(), 9, note.confidence) != SQLITE_OK ||
+            sqlite3_bind_int(statement.get(), 10, note.muted ? 1 : 0) != SQLITE_OK ||
+            !bindText(statement.get(), 11, serializePitch(note.pitchCurve)) ||
+            sqlite3_step(statement.get()) != SQLITE_DONE) {
+            error = sqlite3_errmsg(impl_->db);
+            return false;
+        }
+        for (std::size_t index = 0; index < note.gainEnvelope.size(); ++index) {
+            Statement envelopeStatement;
+            if (!prepare(impl_->db,
+                "INSERT INTO note_gain_envelopes(project_id,note_id,point_index,time_seconds,value) VALUES(?,?,?,?,?);",
+                envelopeStatement, error)) return false;
+            if (!bindText(envelopeStatement.get(), 1, project.id) || !bindText(envelopeStatement.get(), 2, note.id) ||
+                sqlite3_bind_int64(envelopeStatement.get(), 3, static_cast<sqlite3_int64>(index)) != SQLITE_OK ||
+                sqlite3_bind_double(envelopeStatement.get(), 4, note.gainEnvelope[index].timeSeconds) != SQLITE_OK ||
+                sqlite3_bind_double(envelopeStatement.get(), 5, note.gainEnvelope[index].value) != SQLITE_OK ||
+                sqlite3_step(envelopeStatement.get()) != SQLITE_DONE) {
+                error = sqlite3_errmsg(impl_->db);
+                return false;
+            }
+        }
     }
 
-    const char* insertMask = "INSERT INTO spectral_masks VALUES(?,?,?,?,?,?,?,?,?,?);";
     for (const auto& mask : project.masks) {
-        if (sqlite3_prepare_v2(impl_->db, insertMask, -1, &statement, nullptr) != SQLITE_OK) { rollback(); return false; }
-        bindText(statement, 1, mask.id); bindText(statement, 2, project.id); bindText(statement, 3, mask.sourceStemId);
-        bindText(statement, 4, mask.destinationStemId); sqlite3_bind_double(statement, 5, mask.startSeconds);
-        sqlite3_bind_double(statement, 6, mask.endSeconds); sqlite3_bind_double(statement, 7, mask.lowFrequencyHz);
-        sqlite3_bind_double(statement, 8, mask.highFrequencyHz); sqlite3_bind_double(statement, 9, mask.gainDb);
-        sqlite3_bind_double(statement, 10, mask.feather);
-        if (sqlite3_step(statement) != SQLITE_DONE) { error = sqlite3_errmsg(impl_->db); sqlite3_finalize(statement); rollback(); return false; }
-        sqlite3_finalize(statement);
+        Statement statement;
+        if (!prepare(impl_->db,
+            "INSERT INTO project_masks(project_id,id,source_stem_id,destination_stem_id,start_seconds,end_seconds,low_hz,high_hz,gain_db,feather) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?);", statement, error)) return false;
+        if (!bindText(statement.get(), 1, project.id) || !bindText(statement.get(), 2, mask.id) ||
+            !bindText(statement.get(), 3, mask.sourceStemId) || !bindText(statement.get(), 4, mask.destinationStemId) ||
+            sqlite3_bind_double(statement.get(), 5, mask.startSeconds) != SQLITE_OK ||
+            sqlite3_bind_double(statement.get(), 6, mask.endSeconds) != SQLITE_OK ||
+            sqlite3_bind_double(statement.get(), 7, mask.lowFrequencyHz) != SQLITE_OK ||
+            sqlite3_bind_double(statement.get(), 8, mask.highFrequencyHz) != SQLITE_OK ||
+            sqlite3_bind_double(statement.get(), 9, mask.gainDb) != SQLITE_OK ||
+            sqlite3_bind_double(statement.get(), 10, mask.feather) != SQLITE_OK ||
+            sqlite3_step(statement.get()) != SQLITE_DONE) {
+            error = sqlite3_errmsg(impl_->db);
+            return false;
+        }
     }
 
-    return execSql(impl_->db, "COMMIT;", error);
+    for (std::size_t position = 0; position < project.processingGraph.size(); ++position) {
+        const auto& processor = project.processingGraph[position];
+        Statement statement;
+        if (!prepare(impl_->db,
+            "INSERT INTO project_processors(project_id,id,kind,name,enabled,position) VALUES(?,?,?,?,?,?);",
+            statement, error)) return false;
+        if (!bindText(statement.get(), 1, project.id) || !bindText(statement.get(), 2, processor.id) ||
+            !bindText(statement.get(), 3, processorKindToString(processor.kind)) || !bindText(statement.get(), 4, processor.name) ||
+            sqlite3_bind_int(statement.get(), 5, processor.enabled ? 1 : 0) != SQLITE_OK ||
+            sqlite3_bind_int64(statement.get(), 6, static_cast<sqlite3_int64>(position)) != SQLITE_OK ||
+            sqlite3_step(statement.get()) != SQLITE_DONE) {
+            error = sqlite3_errmsg(impl_->db);
+            return false;
+        }
+        for (const auto& [name, value] : processor.parameters) {
+            Statement parameterStatement;
+            if (!prepare(impl_->db,
+                "INSERT INTO processor_parameters(project_id,processor_id,name,value) VALUES(?,?,?,?);",
+                parameterStatement, error)) return false;
+            if (!bindText(parameterStatement.get(), 1, project.id) ||
+                !bindText(parameterStatement.get(), 2, processor.id) ||
+                !bindText(parameterStatement.get(), 3, name) ||
+                sqlite3_bind_double(parameterStatement.get(), 4, value) != SQLITE_OK ||
+                sqlite3_step(parameterStatement.get()) != SQLITE_DONE) {
+                error = sqlite3_errmsg(impl_->db);
+                return false;
+            }
+        }
+    }
+
+    return transaction.commit(error);
 #else
     (void)project;
     error = "SQLite3 was not found when OmniStemCore was built";
@@ -252,46 +483,128 @@ std::optional<Project> ProjectRepository::load(const std::string& projectId, std
 #if OMNISTEM_HAS_SQLITE
     if (!impl_->db && !open(error)) return std::nullopt;
     Project project;
-    sqlite3_stmt* statement{};
-    if (sqlite3_prepare_v2(impl_->db, "SELECT id,name,sample_rate FROM projects WHERE id=?;", -1, &statement, nullptr) != SQLITE_OK) {
-        error = sqlite3_errmsg(impl_->db); return std::nullopt;
-    }
-    bindText(statement, 1, projectId);
-    if (sqlite3_step(statement) != SQLITE_ROW) { sqlite3_finalize(statement); error = "Project not found"; return std::nullopt; }
-    project.id = reinterpret_cast<const char*>(sqlite3_column_text(statement, 0));
-    project.name = reinterpret_cast<const char*>(sqlite3_column_text(statement, 1));
-    project.sampleRate = sqlite3_column_double(statement, 2);
-    sqlite3_finalize(statement);
 
-    if (sqlite3_prepare_v2(impl_->db, "SELECT id,name,role,audio_path,gain_db,pan,muted,solo FROM stems WHERE project_id=?;", -1, &statement, nullptr) == SQLITE_OK) {
-        bindText(statement, 1, projectId);
-        while (sqlite3_step(statement) == SQLITE_ROW) {
+    {
+        Statement statement;
+        if (!prepare(impl_->db, "SELECT id,name,sample_rate FROM projects WHERE id=?;", statement, error) ||
+            !bindText(statement.get(), 1, projectId)) {
+            if (error.empty()) error = sqlite3_errmsg(impl_->db);
+            return std::nullopt;
+        }
+        if (sqlite3_step(statement.get()) != SQLITE_ROW) {
+            error = "Project not found";
+            return std::nullopt;
+        }
+        project.id = columnText(statement.get(), 0);
+        project.name = columnText(statement.get(), 1);
+        project.sampleRate = sqlite3_column_double(statement.get(), 2);
+    }
+
+    {
+        Statement statement;
+        if (!prepare(impl_->db,
+            "SELECT id,name,role,audio_path,gain_db,pan,muted,solo FROM project_stems WHERE project_id=? ORDER BY rowid;",
+            statement, error) || !bindText(statement.get(), 1, projectId)) return std::nullopt;
+        while (sqlite3_step(statement.get()) == SQLITE_ROW) {
             Stem stem;
-            stem.id = reinterpret_cast<const char*>(sqlite3_column_text(statement, 0));
-            stem.name = reinterpret_cast<const char*>(sqlite3_column_text(statement, 1));
-            stem.audioPath = reinterpret_cast<const char*>(sqlite3_column_text(statement, 3));
-            stem.gainDb = sqlite3_column_double(statement, 4); stem.pan = sqlite3_column_double(statement, 5);
-            stem.muted = sqlite3_column_int(statement, 6) != 0; stem.solo = sqlite3_column_int(statement, 7) != 0;
+            stem.id = columnText(statement.get(), 0);
+            stem.name = columnText(statement.get(), 1);
+            stem.role = stemRoleFromString(columnText(statement.get(), 2));
+            stem.audioPath = columnText(statement.get(), 3);
+            stem.gainDb = sqlite3_column_double(statement.get(), 4);
+            stem.pan = sqlite3_column_double(statement.get(), 5);
+            stem.muted = sqlite3_column_int(statement.get(), 6) != 0;
+            stem.solo = sqlite3_column_int(statement.get(), 7) != 0;
             project.stems.push_back(std::move(stem));
         }
-        sqlite3_finalize(statement);
     }
 
-    if (sqlite3_prepare_v2(impl_->db, "SELECT id,stem_id,start_seconds,duration_seconds,gain_db,pan,formant,confidence,muted,pitch_curve FROM notes WHERE project_id=?;", -1, &statement, nullptr) == SQLITE_OK) {
-        bindText(statement, 1, projectId);
-        while (sqlite3_step(statement) == SQLITE_ROW) {
+    std::unordered_map<std::string, std::size_t> noteIndexes;
+    {
+        Statement statement;
+        if (!prepare(impl_->db,
+            "SELECT id,stem_id,start_seconds,duration_seconds,gain_db,pan,formant,confidence,muted,pitch_curve "
+            "FROM project_notes WHERE project_id=? ORDER BY rowid;",
+            statement, error) || !bindText(statement.get(), 1, projectId)) return std::nullopt;
+        while (sqlite3_step(statement.get()) == SQLITE_ROW) {
             NoteEvent note;
-            note.id = reinterpret_cast<const char*>(sqlite3_column_text(statement, 0));
-            note.stemId = reinterpret_cast<const char*>(sqlite3_column_text(statement, 1));
-            note.startSeconds = sqlite3_column_double(statement, 2); note.durationSeconds = sqlite3_column_double(statement, 3);
-            note.gainDb = sqlite3_column_double(statement, 4); note.pan = sqlite3_column_double(statement, 5);
-            note.formantSemitones = sqlite3_column_double(statement, 6); note.confidence = sqlite3_column_double(statement, 7);
-            note.muted = sqlite3_column_int(statement, 8) != 0;
-            note.pitchCurve = parsePitch(reinterpret_cast<const char*>(sqlite3_column_text(statement, 9)));
+            note.id = columnText(statement.get(), 0);
+            note.stemId = columnText(statement.get(), 1);
+            note.startSeconds = sqlite3_column_double(statement.get(), 2);
+            note.durationSeconds = sqlite3_column_double(statement.get(), 3);
+            note.gainDb = sqlite3_column_double(statement.get(), 4);
+            note.pan = sqlite3_column_double(statement.get(), 5);
+            note.formantSemitones = sqlite3_column_double(statement.get(), 6);
+            note.confidence = sqlite3_column_double(statement.get(), 7);
+            note.muted = sqlite3_column_int(statement.get(), 8) != 0;
+            note.pitchCurve = parsePitch(columnText(statement.get(), 9));
+            noteIndexes.emplace(note.id, project.notes.size());
             project.notes.push_back(std::move(note));
         }
-        sqlite3_finalize(statement);
     }
+
+    {
+        Statement statement;
+        if (!prepare(impl_->db,
+            "SELECT note_id,time_seconds,value FROM note_gain_envelopes WHERE project_id=? ORDER BY note_id,point_index;",
+            statement, error) || !bindText(statement.get(), 1, projectId)) return std::nullopt;
+        while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+            const auto noteId = columnText(statement.get(), 0);
+            const auto it = noteIndexes.find(noteId);
+            if (it != noteIndexes.end()) {
+                project.notes[it->second].gainEnvelope.push_back({
+                    sqlite3_column_double(statement.get(), 1), sqlite3_column_double(statement.get(), 2)});
+            }
+        }
+    }
+
+    {
+        Statement statement;
+        if (!prepare(impl_->db,
+            "SELECT id,source_stem_id,destination_stem_id,start_seconds,end_seconds,low_hz,high_hz,gain_db,feather "
+            "FROM project_masks WHERE project_id=? ORDER BY rowid;",
+            statement, error) || !bindText(statement.get(), 1, projectId)) return std::nullopt;
+        while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+            project.masks.push_back({
+                columnText(statement.get(), 0), columnText(statement.get(), 1), columnText(statement.get(), 2),
+                sqlite3_column_double(statement.get(), 3), sqlite3_column_double(statement.get(), 4),
+                sqlite3_column_double(statement.get(), 5), sqlite3_column_double(statement.get(), 6),
+                sqlite3_column_double(statement.get(), 7), sqlite3_column_double(statement.get(), 8)});
+        }
+    }
+
+    std::unordered_map<std::string, std::size_t> processorIndexes;
+    {
+        Statement statement;
+        if (!prepare(impl_->db,
+            "SELECT id,kind,name,enabled FROM project_processors WHERE project_id=? ORDER BY position;",
+            statement, error) || !bindText(statement.get(), 1, projectId)) return std::nullopt;
+        while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+            ProcessorNode processor;
+            processor.id = columnText(statement.get(), 0);
+            processor.kind = processorKindFromString(columnText(statement.get(), 1));
+            processor.name = columnText(statement.get(), 2);
+            processor.enabled = sqlite3_column_int(statement.get(), 3) != 0;
+            processorIndexes.emplace(processor.id, project.processingGraph.size());
+            project.processingGraph.push_back(std::move(processor));
+        }
+    }
+
+    {
+        Statement statement;
+        if (!prepare(impl_->db,
+            "SELECT processor_id,name,value FROM processor_parameters WHERE project_id=? ORDER BY processor_id,name;",
+            statement, error) || !bindText(statement.get(), 1, projectId)) return std::nullopt;
+        while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+            const auto processorId = columnText(statement.get(), 0);
+            const auto it = processorIndexes.find(processorId);
+            if (it != processorIndexes.end()) {
+                project.processingGraph[it->second].parameters[columnText(statement.get(), 1)] =
+                    sqlite3_column_double(statement.get(), 2);
+            }
+        }
+    }
+
     return project;
 #else
     (void)projectId;
@@ -324,7 +637,7 @@ JobManager::~JobManager() { shutdown(); }
 
 bool JobManager::submit(JobSpec spec, Work work) {
     std::lock_guard lock(mutex_);
-    if (stopping_ || jobs_.contains(spec.id)) return false;
+    if (stopping_ || spec.id.empty() || !work || jobs_.contains(spec.id)) return false;
     auto control = std::make_shared<JobControl>();
     control->snapshot.spec = std::move(spec);
     control->work = std::move(work);
@@ -339,7 +652,10 @@ bool JobManager::cancel(const std::string& id) {
     const auto it = jobs_.find(id);
     if (it == jobs_.end()) return false;
     it->second->cancelRequested.store(true);
-    if (it->second->snapshot.state == JobState::queued) it->second->snapshot.state = JobState::cancelled;
+    if (it->second->snapshot.state == JobState::queued) {
+        it->second->snapshot.state = JobState::cancelled;
+        it->second->snapshot.message = "Cancelled before execution";
+    }
     return true;
 }
 
@@ -376,7 +692,8 @@ void JobManager::workerLoop() {
             std::unique_lock lock(mutex_);
             condition_.wait(lock, [&] { return stopping_ || !queue_.empty(); });
             if (stopping_ && queue_.empty()) return;
-            control = queue_.front(); queue_.pop();
+            control = queue_.front();
+            queue_.pop();
             if (control->cancelRequested.load()) continue;
             control->snapshot.state = JobState::running;
         }
@@ -406,7 +723,10 @@ bool MidiWriter::writeType1(const std::filesystem::path& path,
                             double tempoBpm,
                             std::uint16_t ticksPerQuarter,
                             std::string& error) {
-    if (!(tempoBpm > 0.0) || ticksPerQuarter == 0) { error = "Invalid MIDI timing settings"; return false; }
+    if (!(tempoBpm > 0.0) || !std::isfinite(tempoBpm) || ticksPerQuarter == 0) {
+        error = "Invalid MIDI timing settings";
+        return false;
+    }
     struct Event { std::uint32_t tick; bool on; std::uint8_t note; std::uint8_t velocity; };
     std::vector<Event> events;
     const double ticksPerSecond = static_cast<double>(ticksPerQuarter) * tempoBpm / 60.0;
@@ -426,25 +746,42 @@ bool MidiWriter::writeType1(const std::filesystem::path& path,
 
     std::vector<std::uint8_t> track;
     const auto microsPerQuarter = static_cast<std::uint32_t>(std::lround(60000000.0 / tempoBpm));
-    appendVarLen(track, 0); track.insert(track.end(), {0xff, 0x51, 0x03,
+    appendVarLen(track, 0);
+    track.insert(track.end(), {0xff, 0x51, 0x03,
         static_cast<std::uint8_t>((microsPerQuarter >> 16) & 0xff),
         static_cast<std::uint8_t>((microsPerQuarter >> 8) & 0xff),
         static_cast<std::uint8_t>(microsPerQuarter & 0xff)});
     std::uint32_t previousTick{};
     for (const auto& event : events) {
         appendVarLen(track, event.tick - previousTick);
-        track.push_back(event.on ? 0x90 : 0x80); track.push_back(event.note); track.push_back(event.velocity);
+        track.push_back(event.on ? 0x90 : 0x80);
+        track.push_back(event.note);
+        track.push_back(event.velocity);
         previousTick = event.tick;
     }
-    appendVarLen(track, 0); track.insert(track.end(), {0xff, 0x2f, 0x00});
+    appendVarLen(track, 0);
+    track.insert(track.end(), {0xff, 0x2f, 0x00});
 
     std::vector<std::uint8_t> file;
-    file.insert(file.end(), {'M','T','h','d'}); appendBe32(file, 6); appendBe16(file, 1); appendBe16(file, 1); appendBe16(file, ticksPerQuarter);
-    file.insert(file.end(), {'M','T','r','k'}); appendBe32(file, static_cast<std::uint32_t>(track.size())); file.insert(file.end(), track.begin(), track.end());
+    file.insert(file.end(), {'M','T','h','d'});
+    appendBe32(file, 6);
+    appendBe16(file, 1);
+    appendBe16(file, 1);
+    appendBe16(file, ticksPerQuarter);
+    file.insert(file.end(), {'M','T','r','k'});
+    appendBe32(file, static_cast<std::uint32_t>(track.size()));
+    file.insert(file.end(), track.begin(), track.end());
+
     std::ofstream output(path, std::ios::binary);
-    if (!output) { error = "Cannot open MIDI output file"; return false; }
+    if (!output) {
+        error = "Cannot open MIDI output file";
+        return false;
+    }
     output.write(reinterpret_cast<const char*>(file.data()), static_cast<std::streamsize>(file.size()));
-    if (!output) { error = "Failed while writing MIDI output"; return false; }
+    if (!output) {
+        error = "Failed while writing MIDI output";
+        return false;
+    }
     return true;
 }
 
@@ -477,7 +814,10 @@ std::string AiRequestBuilder::separation(const std::filesystem::path& source,
     std::ostringstream out;
     out << "{\"id\":\"separate-1\",\"method\":\"separation.run\",\"params\":{\"source\":\""
         << escapeJson(source.string()) << "\",\"quality\":\"" << escapeJson(quality) << "\",\"stems\":[";
-    for (std::size_t i = 0; i < stems.size(); ++i) { if (i) out << ','; out << '"' << escapeJson(stems[i]) << '"'; }
+    for (std::size_t i = 0; i < stems.size(); ++i) {
+        if (i != 0) out << ',';
+        out << '"' << escapeJson(stems[i]) << '"';
+    }
     out << "]}}";
     return out.str();
 }
