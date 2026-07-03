@@ -1,18 +1,38 @@
-cmake_minimum_required(VERSION 3.24)
-project(OmniStemDesktop VERSION 0.1.0 LANGUAGES CXX)
-
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-
-add_executable(OmniStemDesktop src/main.cpp)
-
-target_compile_definitions(OmniStemDesktop PRIVATE
-    OMNISTEM_VERSION="${PROJECT_VERSION}"
-)
+add_executable(OmniStemCLI src/main.cpp)
+target_link_libraries(OmniStemCLI PRIVATE OmniStemCore)
 
 if(MSVC)
-    target_compile_options(OmniStemDesktop PRIVATE /W4 /permissive- /EHsc)
+    target_compile_options(OmniStemCLI PRIVATE /W4 /permissive- /EHsc)
 else()
-    target_compile_options(OmniStemDesktop PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(OmniStemCLI PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if(OMNISTEM_BUILD_JUCE_APP)
+    if(NOT OMNISTEM_JUCE_SOURCE_DIR)
+        message(FATAL_ERROR "Set OMNISTEM_JUCE_SOURCE_DIR to a JUCE checkout")
+    endif()
+
+    add_subdirectory(${OMNISTEM_JUCE_SOURCE_DIR} ${CMAKE_BINARY_DIR}/juce)
+
+    juce_add_gui_app(OmniStemStudio
+        PRODUCT_NAME "OmniStem Studio"
+        COMPANY_NAME "OmniStem"
+        BUNDLE_ID "studio.omnistem.desktop"
+    )
+
+    juce_generate_juce_header(OmniStemStudio)
+    target_sources(OmniStemStudio PRIVATE src/JuceApp.cpp)
+    target_link_libraries(OmniStemStudio PRIVATE
+        OmniStemCore
+        juce::juce_audio_utils
+        juce::juce_audio_processors
+        juce::juce_dsp
+        juce::juce_gui_extra
+    )
+    target_compile_definitions(OmniStemStudio PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_ASIO=1
+        JUCE_WASAPI=1
+    )
 endif()
