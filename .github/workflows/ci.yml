@@ -89,4 +89,17 @@ jobs:
           -DJUCE_BUILD_EXAMPLES=OFF
           -DJUCE_BUILD_EXTRAS=OFF
       - name: Build JUCE application
-        run: cmake --build build-juce --config Release --target OmniStemStudio --parallel
+        shell: pwsh
+        run: |
+          cmake --build build-juce --config Release --target OmniStemStudio --parallel 2 2>&1 | Tee-Object -FilePath juce-build.log
+          $code = $LASTEXITCODE
+          Select-String -Path juce-build.log -Pattern "error C[0-9]+:|fatal error|FAILED:|LNK[0-9]+" | ForEach-Object { $_.Line } | Set-Content juce-errors.log
+          if ($code -ne 0) { exit $code }
+      - name: Upload JUCE diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: juce-build-diagnostics
+          path: |
+            juce-errors.log
+            juce-build.log
