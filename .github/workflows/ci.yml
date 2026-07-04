@@ -25,11 +25,21 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install SQLite
+        run: vcpkg install sqlite3:x64-windows
       - name: Configure
-        run: cmake -S . -B build -DOMNISTEM_BUILD_JUCE_APP=OFF
+        run: >-
+          cmake -S . -B build
+          -DOMNISTEM_BUILD_JUCE_APP=OFF
+          -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+          -DVCPKG_TARGET_TRIPLET=x64-windows
       - name: Build
         run: cmake --build build --config Release --parallel
-      - name: Native tests
+      - name: Core tests
+        run: .\build\packages\core\Release\OmniStemCoreTests.exe
+      - name: DAW system tests
+        run: .\build\packages\core\Release\OmniStemDawTests.exe
+      - name: CTest registry
         run: ctest --test-dir build -C Release --output-on-failure
       - name: CLI smoke test
         run: .\build\apps\desktop\Release\OmniStemCLI.exe
@@ -48,16 +58,16 @@ jobs:
       - name: Protocol smoke test
         run: echo '{"id":"ci","method":"health.check","params":{}}' | python services/ai-worker/main.py
 
-  python-dsp:
+  python-production-audio:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install DSP dependencies
-        run: python -m pip install "numpy>=1.26,<3" "soundfile>=0.12,<1"
-      - name: Run worker and DSP tests
+      - name: Install production audio dependencies
+        run: python -m pip install -r services/ai-worker/requirements-production.txt
+      - name: Run worker and production audio tests
         run: python -m unittest discover -s services/ai-worker/tests -v
 
   juce-windows:
@@ -67,6 +77,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: juce-framework/JUCE
+          ref: 8.0.8
           path: external/JUCE
           fetch-depth: 1
       - name: Configure JUCE application
@@ -79,4 +90,17 @@ jobs:
           -DJUCE_BUILD_EXAMPLES=OFF
           -DJUCE_BUILD_EXTRAS=OFF
       - name: Build JUCE application
-        run: cmake --build build-juce --config Release --target OmniStemStudio --parallel
+        shell: pwsh
+        run: |
+          cmake --build build-juce --config Release --target OmniStemStudio --parallel 2 2>&1 | Tee-Object -FilePath juce-build.log
+          $code = $LASTEXITCODE
+          Select-String -Path juce-build.log -Pattern "error C[0-9]+:|fatal error|FAILED:|LNK[0-9]+" | ForEach-Object { $_.Line } | Set-Content juce-errors.log
+          if ($code -ne 0) { exit $code }
+      - name: Upload JUCE diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: juce-build-diagnostics
+          path: |
+            juce-errors.log
+            juce-build.log

@@ -1,4 +1,8 @@
-add_library(OmniStemCore STATIC src/OmniStemCore.cpp)
+add_library(OmniStemCore STATIC
+    src/OmniStemCore.cpp
+    src/TimelineSystems.cpp
+    src/RoutingSystems.cpp
+)
 
 target_include_directories(OmniStemCore PUBLIC include)
 target_link_libraries(OmniStemCore PUBLIC Threads::Threads)
@@ -20,3 +24,7 @@ endif()
 add_executable(OmniStemCoreTests tests/CoreTests.cpp)
 target_link_libraries(OmniStemCoreTests PRIVATE OmniStemCore)
 add_test(NAME OmniStemCoreTests COMMAND OmniStemCoreTests)
+
+add_executable(OmniStemDawTests tests/DawSystemsTests.cpp)
+target_link_libraries(OmniStemDawTests PRIVATE OmniStemCore)
+add_test(NAME OmniStemDawTests COMMAND OmniStemDawTests)

@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "transport": {
+    "control": "length-prefixed-json",
+    "audio": "shared-memory-float32-planar",
+    "maximumChannels": 64,
+    "maximumBlockSize": 8192
+  },
+  "commands": [
+    "load",
+    "prepare",
+    "process",
+    "getState",
+    "setState",
+    "openEditor",
+    "closeEditor",
+    "heartbeat",
+    "shutdown"
+  ],
+  "load": {
+    "required": ["instanceId", "format", "pluginIdentifier"],
+    "formats": ["VST3", "CLAP"]
+  },
+  "state": {
+    "encoding": "base64",
+    "maximumBytes": 67108864,
+    "requiresPluginIdentifierMatch": true
+  },
+  "editor": {
+    "mode": "out-of-process-window",
+    "returnsNativeWindowHandle": true
+  },
+  "failurePolicy": {
+    "heartbeatTimeoutMs": 2000,
+    "maximumRestartsPerMinute": 3,
+    "quarantineAfterBudget": true
+  }
+}

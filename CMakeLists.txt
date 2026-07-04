@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(OmniStemStudio VERSION 0.3.0 LANGUAGES CXX)
+project(OmniStemStudio VERSION 0.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -15,3 +15,4 @@ find_package(SQLite3 QUIET)
 enable_testing()
 add_subdirectory(packages/core)
 add_subdirectory(apps/desktop)
+include(cmake/Packaging.cmake)
