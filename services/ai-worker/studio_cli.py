@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from cli_support import CliError, emit, invoke, load_json, parse_csv
+from studio_config import ConfigError, load_config, write_default_config
 
 VERSION = "0.4.0"
 AUDIO_EXTENSIONS = {
@@ -41,6 +42,14 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("env", help="Show environment information")
     commands.add_parser("doctor", help="Check worker and runtime capabilities")
     commands.add_parser("engines", help="List supported separation engines")
+
+    config = commands.add_parser("config", help="Inspect or initialize configuration")
+    config.add_argument("action", choices=["show", "init"])
+    config.add_argument("--path", type=Path)
+    config.add_argument("--overwrite", action="store_true")
+
+    serve = commands.add_parser("serve", help="Start the local-only FastAPI service")
+    serve.add_argument("--config", type=Path)
 
     models = commands.add_parser("models", help="Search the model catalog")
     models.add_argument("--query", default="")
@@ -162,6 +171,18 @@ def dispatch(args: argparse.Namespace) -> dict[str, Any]:
         return invoke("health.check", {})
     if args.command == "engines":
         return invoke("engine.list", {})
+    if args.command == "config":
+        try:
+            if args.action == "init":
+                return {"path": str(write_default_config(args.path, overwrite=args.overwrite))}
+            return load_config(args.path).public_dict()
+        except ConfigError as exc:
+            raise CliError(str(exc)) from exc
+    if args.command == "serve":
+        from serve_local import run
+
+        run(args.config)
+        return {"stopped": True}
     if args.command == "models":
         return invoke("catalog.models", {
             "query": args.query,
@@ -198,7 +219,7 @@ def main() -> int:
     args = build_parser().parse_args()
     try:
         result = dispatch(args)
-    except CliError as exc:
+    except (CliError, RuntimeError) as exc:
         emit({"ok": False, "error": str(exc)}, compact=args.json)
         return 1
     emit({"ok": True, "result": result}, compact=args.json)
