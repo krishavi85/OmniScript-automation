@@ -7,7 +7,12 @@ import worker
 import advanced_methods  # Registers pipeline and benchmark methods.
 from authorized_voice_provider import run_authorized_provider
 from engine_registry import public_registry
-from engine_runtime import EngineRuntimeError, execute as execute_engine
+from engine_runtime import (
+    EngineRuntimeError,
+    engine_status,
+    execute as execute_engine,
+    installed_engine_ids,
+)
 from instrument_renderer import render_instrument
 from mastering_pro import analyze_loudness
 from mode_planner import plan_mode
@@ -27,7 +32,14 @@ def required_path(params: dict[str, Any], key: str) -> Path:
 
 
 def engine_list(_: dict[str, Any]) -> dict[str, Any]:
-    return {"engines": public_registry()}
+    engines: list[dict[str, object]] = []
+    for record in public_registry():
+        runtime = engine_status(str(record["id"]))
+        engines.append({**record, **runtime})
+    return {
+        "engines": engines,
+        "installedEngineIds": [str(row["id"]) for row in engines if bool(row["installed"])],
+    }
 
 
 def catalog_models(params: dict[str, Any]) -> dict[str, Any]:
@@ -82,6 +94,13 @@ def intelligent_mode_plan(params: dict[str, Any]) -> dict[str, Any]:
     installed = params.get("installedEngines")
     if installed is not None and not isinstance(installed, list):
         raise worker.RpcError("INVALID_ARGUMENT", "params.installedEngines must be an array")
+    if installed is None:
+        installed = installed_engine_ids()
+    if str(params.get("mode", "standard")).strip().lower() == "auto" and not installed:
+        raise worker.RpcError(
+            "BACKEND_UNAVAILABLE",
+            "Auto mode requires at least one installed separation engine",
+        )
     try:
         return plan_mode(params, installed_engines=installed)
     except ModeError as exc:
