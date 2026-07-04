@@ -9,8 +9,11 @@ from engine_registry import public_registry
 from engine_runtime import EngineRuntimeError, execute as execute_engine
 from instrument_renderer import render_instrument
 from mastering_pro import analyze_loudness
+from mode_planner import plan_mode
+from mode_types import ModeError
 from neural_note_engine import render as render_neural_note
 from onnx_audio import run_restoration_model
+from spec_catalog import CatalogError, normalize_stems, search_models, verify_artifact
 from spectral_png import export_png_tiles
 from spectral_tools import generate_tiles, harmonic_note_resynthesis, save_brush_operations
 
@@ -24,6 +27,64 @@ def required_path(params: dict[str, Any], key: str) -> Path:
 
 def engine_list(_: dict[str, Any]) -> dict[str, Any]:
     return {"engines": public_registry()}
+
+
+def catalog_models(params: dict[str, Any]) -> dict[str, Any]:
+    try:
+        models = search_models(
+            query=str(params.get("query", "")).strip() or None,
+            engine=str(params.get("engine", "")).strip() or None,
+            family=str(params.get("family", "")).strip() or None,
+            tag=str(params.get("tag", "")).strip() or None,
+            stem=str(params.get("stem", "")).strip() or None,
+            include_deprecated=bool(params.get("includeDeprecated", True)),
+            sort_by=str(params.get("sortBy", "name")),
+            descending=bool(params.get("descending", False)),
+        )
+    except CatalogError as exc:
+        raise worker.RpcError("CATALOG_ERROR", str(exc)) from exc
+    warnings = [
+        {
+            "model": model["id"],
+            "message": f"Deprecated model; use {model['replacement']}" if model["replacement"] else "Deprecated model",
+        }
+        for model in models
+        if model["deprecated"]
+    ]
+    return {"models": models, "warnings": warnings}
+
+
+def catalog_verify(params: dict[str, Any]) -> dict[str, Any]:
+    artifact = required_path(params, "artifact")
+    expected = str(params.get("sha256", "")).strip()
+    try:
+        result = verify_artifact(artifact, expected)
+    except CatalogError as exc:
+        raise worker.RpcError("CATALOG_ERROR", str(exc)) from exc
+    if not result["verified"]:
+        raise worker.RpcError("CHECKSUM_MISMATCH", "Artifact SHA-256 does not match the expected digest")
+    return result
+
+
+def taxonomy_normalize(params: dict[str, Any]) -> dict[str, Any]:
+    stems = params.get("stems")
+    if not isinstance(stems, list):
+        raise worker.RpcError("INVALID_ARGUMENT", "params.stems must be an array")
+    try:
+        normalized = normalize_stems(str(stem) for stem in stems)
+    except CatalogError as exc:
+        raise worker.RpcError("TAXONOMY_ERROR", str(exc)) from exc
+    return {"stems": normalized}
+
+
+def intelligent_mode_plan(params: dict[str, Any]) -> dict[str, Any]:
+    installed = params.get("installedEngines")
+    if installed is not None and not isinstance(installed, list):
+        raise worker.RpcError("INVALID_ARGUMENT", "params.installedEngines must be an array")
+    try:
+        return plan_mode(params, installed_engines=installed)
+    except ModeError as exc:
+        raise worker.RpcError("MODE_ERROR", str(exc)) from exc
 
 
 def engine_separate(params: dict[str, Any]) -> dict[str, Any]:
@@ -52,7 +113,8 @@ def spectral_tiles(params: dict[str, Any]) -> dict[str, Any]:
     def operation(job: worker.Job) -> dict[str, Any]:
         job.update(progress=0.1, message="Computing spectrogram tiles")
         result = generate_tiles(
-            source, output,
+            source,
+            output,
             n_fft=int(params.get("nFft", 2048)),
             hop=int(params.get("hop", 512)),
             tile_columns=int(params.get("tileColumns", 256)),
@@ -78,7 +140,8 @@ def note_resynthesize(params: dict[str, Any]) -> dict[str, Any]:
     def operation(job: worker.Job) -> dict[str, Any]:
         job.update(progress=0.1, message="Resynthesizing selected note")
         return harmonic_note_resynthesis(
-            source, output,
+            source,
+            output,
             start_seconds=float(params["startSeconds"]),
             end_seconds=float(params["endSeconds"]),
             fundamental_hz=float(params["fundamentalHz"]),
@@ -154,6 +217,10 @@ def voice_transform_authorized(params: dict[str, Any]) -> dict[str, Any]:
 worker.METHODS.update({
     "engine.list": engine_list,
     "engine.separate": engine_separate,
+    "catalog.models": catalog_models,
+    "catalog.verify": catalog_verify,
+    "taxonomy.normalize": taxonomy_normalize,
+    "mode.plan": intelligent_mode_plan,
     "spectral.tiles": spectral_tiles,
     "spectral.brush.save": spectral_brush_save,
     "note.resynthesize": note_resynthesize,
