@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import importlib.util
 import os
 import sys
 import tempfile
@@ -13,7 +14,10 @@ sys.path.insert(0, str(ROOT / "tools"))
 from sign_release import create_signed_manifest
 from update_verifier import verify_artifact, verify_manifest
 
+HAS_CRYPTOGRAPHY = importlib.util.find_spec("cryptography") is not None
 
+
+@unittest.skipUnless(HAS_CRYPTOGRAPHY, "cryptography is an optional production dependency")
 class SignedUpdateTests(unittest.TestCase):
     def test_manifest_signature_and_artifact_hash(self) -> None:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
