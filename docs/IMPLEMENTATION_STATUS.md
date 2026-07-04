@@ -1,88 +1,88 @@
 # Implementation and Verification Status
 
-This document separates working code from adapters that require optional models and from product features that remain incomplete. It should be updated whenever a subsystem changes.
+This document supersedes the capability summary introduced by commit `5008c78`. Git commits are immutable; corrections are made by later commits such as this one.
 
-## Verified locally
+## Verified by automated tests
 
-The following checks were run against the checked-in source structure and passed:
+The repository currently verifies:
 
-- CMake configuration and C++20 compilation without the JUCE target
-- Native regression tests through CTest
-- SQLite save/load round-trip for projects, project-local IDs, stem roles, notes, gain envelopes, spectral masks, processor chains, and processor parameters
-- Reversible note-gain command apply/undo
-- Standard MIDI file creation and header validation
-- Native background job completion and progress reporting
-- Python bytecode compilation
-- AI-worker protocol and validation tests
-- OmniScript import blocking and transaction generation
-- Restoration rendering on generated audio using NumPy and SoundFile
-- Mastering rendering on generated audio using NumPy and SoundFile
-- Spectral-mask STFT rendering on generated audio
-- Synthetic two-model ensemble fusion, including inverted-polarity correction
+- Linux and Windows C++20 configuration, compilation, regression tests, and CLI execution
+- SQLite project persistence with project-local IDs, stems, notes, gain envelopes, masks, processor chains, and parameters
+- Reversible edit commands, MIDI generation, and cancellable background jobs
+- Tempo maps, automation interpolation, take comping, acyclic routing, route latency, and output compensation
+- Plugin state containers and plugin-chain latency accounting
+- Worker heartbeat, restart-budget, crash, and quarantine states
+- Python worker protocol, job cancellation, OmniScript restrictions, and reversible transactions
+- STFT spectral masking, spectrogram tiles, PNG export, and brush-operation validation
+- Harmonic note resynthesis
+- Restoration and mastering DSP
+- LUFS, RMS, sample-peak, and four-times oversampled true-peak analysis
+- Synthetic multi-model stem fusion including polarity correction
+- Signed update-manifest verification and tamper detection when the optional cryptography dependency is installed
 
-## Implemented, but dependent on optional components
+## Implemented model-dependent systems
 
-### Demucs separation
+These paths are executable but require compatible runtimes, model artifacts, and hardware:
 
-The worker launches installed Demucs models, discovers rendered stems, reports missing requested stems, and supports a real multi-model ensemble path. Ensemble mode runs multiple models, checks sample-rate/channel compatibility, corrects whole-file polarity inversions, and averages sample-aligned results.
+### Stem separation
 
-A full music separation job still requires installed Demucs model weights and suitable hardware. The repository does not redistribute model weights.
+The worker runs Demucs models, discovers stems, reports missing stems, and supports multi-model ensemble fusion with compatibility checks and polarity alignment.
 
-### Basic Pitch transcription
+### Audio-to-MIDI
 
-The worker supports Basic Pitch through its command-line interface and a programmatic fallback. It requests MIDI, note-event CSV, and raw model-output NPZ files.
+The Basic Pitch adapter requests MIDI, note-event CSV, and raw model outputs.
 
-Actual inference requires the optional Basic Pitch runtime and its compatible model dependencies.
+### Neural note resynthesis
 
-### JUCE Windows application
+The note-conditioned ONNX adapter processes long audio in overlapping blocks and accepts MIDI pitch, note range, gain, and pitch-shift conditions. Output quality depends on the installed trained model. Perfect isolation is not guaranteed when sources share the same harmonics.
 
-The JUCE target contains a native window, audio import, waveform thumbnail, transport playback, audio-device selector, WASAPI support, optional ASIO compilation, editor workspaces, and plugin scanning/management.
+### Neural restoration
 
-The JUCE application is covered by a Windows build job in GitHub Actions. It is not covered by an automated audio-device playback test because CI runners do not provide a representative professional audio interface.
+The ONNX restoration adapter supports denoise, dereverb, and declipping manifests with CPU, DirectML, or CUDA provider selection where available. Reviewed model weights are not silently redistributed.
 
-## Partial implementations
+### Authorized voice transformation
 
-### Spectral editor UI
+Voice transformation is provider-isolated and requires an Ed25519-signed owner-consent document bound to the exact voice ID, model digest, purpose, and validity period. A provenance sidecar records source, output, model, consent, owner, and provider hashes.
 
-The worker performs actual time-frequency mask rendering. The desktop spectral tab is currently a workspace shell; it does not yet draw cached FFT tiles or provide a completed correction brush.
+### Instrument rendering
 
-### Note-level audio editing
+MIDI and SoundFont rendering is available through FluidSynth when it is installed.
 
-The native model, undoable edits, pitch curves, confidence data, persistence, and MIDI export are implemented. High-quality reconstruction of one edited note inside overlapping polyphonic audio is not implemented.
+## Native DAW systems
 
-### Plugin hosting
+Implemented:
 
-Plugin discovery and management are implemented through JUCE. Plugins are not yet instantiated in a project signal graph, shown in dedicated editor windows, latency compensated, sandboxed, or persisted as complete plugin states.
+- Tempo and automation data models
+- Take and comp-region selection
+- Routing DAG and latency calculations
+- Plugin state and latency containers
+- Process heartbeat, restart, and quarantine supervision
+- JUCE audio import, waveform display, transport, WASAPI device selection, editor tabs, and plugin scanning
 
-### Vocal and instrument replacement
+The reproducible JUCE build is pinned to **JUCE 8.0.8**. JUCE 8.0.9 removed `AudioPluginFormatManager::addDefaultFormats()`, so using an unpinned `master` checkout breaks this source version.
 
-Replacement planning and processing-graph nodes exist. Actual neural voice conversion, sample-library rendering, or plugin-driven instrument replacement is not implemented. This remains `plan-only` in the worker response.
+## Packaging and model integrity
 
-### Restoration and mastering
+Implemented:
 
-The included DSP is executable and useful for validation, but it is deliberately basic: DC removal, adaptive gating, peak protection, soft saturation, and peak normalization. Neural denoise, dereverb, declipping, true-peak analysis, LUFS targeting, and professional mastering decisions remain future work.
+- CPack/NSIS package configuration and deterministic package names
+- Ed25519-signed update manifests
+- SHA-256 artifact verification
+- Model-bundle lock files with task, license, filename, and exact SHA-256 validation
+- Protocol contracts for an isolated plugin host and Windows AppContainer sandbox
 
-### AI-assisted editing
+## Remaining product work
 
-The current assistant is a deterministic instruction classifier that produces a validated non-destructive action plan. It is not yet an LLM agent and does not autonomously execute destructive edits.
+The following are not represented as complete:
 
-### OmniScript security
-
-OmniScript validates a restricted AST, blocks imports and attribute access, runs in a spawn-isolated subprocess, has a time limit, and emits command transactions. It is not an OS-grade sandbox for arbitrary hostile code. A production release still needs a capability broker, restricted token, process resource limits, and operating-system sandboxing.
-
-## Not yet implemented
-
-- Complete multitrack mixer and bus-routing graph
-- Plugin processing in the live audio graph
-- Plugin delay compensation and crash isolation
-- GPU-rendered spectrogram tiles and interactive mask brush
-- Polyphonic note-isolation resynthesis
-- Production voice/instrument replacement
-- Recording, comping, automation lanes, tempo mapping, and freeze/bounce workflows
-- Signed Windows installer, updater, and model-pack manager
-- Crash recovery, autosave, telemetry consent, and project repair tools
-- Full accessibility and localization pass
-- Commercial-quality listening tests and benchmark corpus
+- An out-of-process VST3/CLAP host with shared-memory real-time audio transport
+- Remote plugin editor windows and full plugin-state restoration in projects
+- A complete interactive JUCE spectrogram tile and correction-brush editor
+- Fully integrated asynchronous multichannel recording, punch-in/out, and crash recovery
+- A native Windows AppContainer launcher for OmniScript
+- A credentialed autonomous LLM executor with single-use approvals, tamper-evident audit logs, and rollback
+- Bundled production model weights whose licenses and redistribution terms have been reviewed
+- Commercial-quality listening benchmarks proving perfect same-harmonic note isolation
 
 ## Verification commands
 
@@ -94,8 +94,6 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-On Linux or another single-configuration generator, omit `-C Release`.
-
 ### Python worker
 
 ```powershell
@@ -103,22 +101,22 @@ python -m compileall services/ai-worker
 python -m unittest discover -s services/ai-worker/tests -v
 ```
 
-### Optional DSP tests
+### Production DSP
 
 ```powershell
-pip install "numpy>=1.26,<3" "soundfile>=0.12,<1"
+pip install -r services/ai-worker/requirements-production.txt
 python -m unittest discover -s services/ai-worker/tests -v
 ```
 
-### JUCE application
+### JUCE Windows application
 
 ```powershell
-git clone https://github.com/juce-framework/JUCE.git external/JUCE
+git clone --branch 8.0.8 --depth 1 https://github.com/juce-framework/JUCE.git external/JUCE
 cmake -S . -B build-juce `
   -DOMNISTEM_BUILD_JUCE_APP=ON `
   -DOMNISTEM_ENABLE_ASIO=OFF `
   -DOMNISTEM_JUCE_SOURCE_DIR="$PWD/external/JUCE"
-cmake --build build-juce --config Release --target OmniStemStudio
+cmake --build build-juce --config Release --target OmniStemStudio --parallel 2
 ```
 
 Enable ASIO only after a compatible SDK is available and its licensing requirements have been reviewed.
