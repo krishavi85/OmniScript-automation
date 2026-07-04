@@ -84,7 +84,7 @@ jobs:
       - name: Compile API modules
         run: python -m compileall services/ai-worker
       - name: Run API tests
-        run: python -m unittest services/ai-worker/tests/test_api_app.py -v
+        run: python -m unittest discover -s services/ai-worker/tests -p 'test_api_app.py' -v
       - name: CLI doctor smoke test
         run: python services/ai-worker/studio_cli.py --json doctor
 
