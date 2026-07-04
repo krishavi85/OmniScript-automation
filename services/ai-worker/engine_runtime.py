@@ -8,10 +8,44 @@ from pathlib import Path
 from typing import Any, Callable
 
 from engine_commands import build_command
+from engine_registry import ENGINES
 
 
 class EngineRuntimeError(RuntimeError):
     pass
+
+
+ENGINE_EXECUTABLES = {
+    "audio-separator": "audio-separator",
+    "demucs": "demucs",
+    "spleeter": "spleeter",
+    "openunmix": "umx",
+}
+ENGINE_MODULES = {
+    "audio-separator": "audio_separator",
+    "demucs": "demucs",
+    "spleeter": "spleeter",
+    "openunmix": "openunmix",
+}
+
+
+def engine_status(engine_id: str) -> dict[str, Any]:
+    if engine_id not in ENGINES:
+        raise EngineRuntimeError(f"unknown engine: {engine_id}")
+    executable_name = ENGINE_EXECUTABLES[engine_id]
+    executable = shutil.which(executable_name)
+    module_name = ENGINE_MODULES[engine_id]
+    module_available = importlib.util.find_spec(module_name) is not None
+    return {
+        "id": engine_id,
+        "installed": bool(executable or module_available),
+        "executable": executable,
+        "module": module_name if module_available else None,
+    }
+
+
+def installed_engine_ids() -> list[str]:
+    return [engine_id for engine_id in ENGINES if engine_status(engine_id)["installed"]]
 
 
 def resolve_command(command: list[str]) -> list[str]:
@@ -20,8 +54,9 @@ def resolve_command(command: list[str]) -> list[str]:
     executable = shutil.which(command[0])
     if executable:
         return [executable, *command[1:]]
-    module_fallbacks = {"demucs": "demucs", "spleeter": "spleeter"}
-    module_name = module_fallbacks.get(command[0])
+    command_to_engine = {value: key for key, value in ENGINE_EXECUTABLES.items()}
+    engine_id = command_to_engine.get(command[0])
+    module_name = ENGINE_MODULES.get(engine_id or "")
     if module_name and importlib.util.find_spec(module_name) is not None:
         return [sys.executable, "-m", module_name, *command[1:]]
     raise EngineRuntimeError(f"engine executable is unavailable: {command[0]}")
