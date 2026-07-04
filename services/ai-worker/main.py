@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import worker
+import advanced_methods  # Registers pipeline and benchmark methods.
 from authorized_voice_provider import run_authorized_provider
 from engine_registry import public_registry
 from engine_runtime import EngineRuntimeError, execute as execute_engine
