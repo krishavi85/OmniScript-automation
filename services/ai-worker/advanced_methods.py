@@ -5,7 +5,7 @@ from typing import Any
 
 import worker
 from benchmarking import BenchmarkError, analyze_file, benchmark_set
-from engine_runtime import EngineRuntimeError, execute as execute_engine
+from engine_runtime import EngineRuntimeError, execute as execute_engine, installed_engine_ids
 from mode_planner import plan_mode
 from mode_types import ModeError
 from pipeline_runtime import PipelineError, run_pipeline, validate_pipeline
@@ -135,6 +135,14 @@ def mode_run(params: dict[str, Any]) -> dict[str, Any]:
     installed = params.get("installedEngines")
     if installed is not None and not isinstance(installed, list):
         raise worker.RpcError("INVALID_ARGUMENT", "params.installedEngines must be an array")
+    if installed is None:
+        installed = installed_engine_ids()
+    mode = str(params.get("mode", "standard")).strip().lower()
+    if mode == "auto" and not installed:
+        raise worker.RpcError(
+            "BACKEND_UNAVAILABLE",
+            "Auto mode requires at least one installed separation engine",
+        )
     try:
         plan = plan_mode(params, installed_engines=installed)
     except ModeError as exc:
@@ -194,7 +202,6 @@ def mode_run(params: dict[str, Any]) -> dict[str, Any]:
                 if weights is not None:
                     if not isinstance(weights, list) or len(weights) != len(path_maps):
                         raise worker.RpcError("INVALID_ARGUMENT", "weights must match the engine result count")
-                    # Existing fusion is equal-weight; weighted fusion remains explicit future work.
                     if len({float(value) for value in weights}) != 1:
                         raise worker.RpcError("UNSUPPORTED_WEIGHTING", "current production fusion supports equal weights only")
                 stems, missing = worker._fuse_stems(job, path_maps, output_root, step["stems"])
