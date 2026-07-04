@@ -21,7 +21,7 @@ ENGINES: dict[str, EngineSpec] = {
     "audio-separator": EngineSpec(
         "audio-separator", "Audio Separator", COMMON_INPUTS,
         frozenset({"wav", "flac", "mp3", "ogg", "opus", "m4a", "aac", "wma", "aiff", "aif", "caf"}),
-        frozenset({1, 2}),
+        frozenset({1, 2, 4, 5, 6}),
     ),
     "demucs": EngineSpec(
         "demucs", "Demucs", COMMON_INPUTS,
