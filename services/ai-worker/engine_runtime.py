@@ -21,12 +21,16 @@ ENGINE_EXECUTABLES = {
     "spleeter": "spleeter",
     "openunmix": "umx",
 }
-ENGINE_MODULES = {
-    "audio-separator": "audio_separator",
+ENGINE_MODULE_FALLBACKS: dict[str, str | None] = {
+    "audio-separator": None,
     "demucs": "demucs",
     "spleeter": "spleeter",
-    "openunmix": "openunmix",
+    "openunmix": None,
 }
+
+
+def _module_available(module_name: str | None) -> bool:
+    return bool(module_name and importlib.util.find_spec(module_name) is not None)
 
 
 def engine_status(engine_id: str) -> dict[str, Any]:
@@ -34,8 +38,8 @@ def engine_status(engine_id: str) -> dict[str, Any]:
         raise EngineRuntimeError(f"unknown engine: {engine_id}")
     executable_name = ENGINE_EXECUTABLES[engine_id]
     executable = shutil.which(executable_name)
-    module_name = ENGINE_MODULES[engine_id]
-    module_available = importlib.util.find_spec(module_name) is not None
+    module_name = ENGINE_MODULE_FALLBACKS[engine_id]
+    module_available = _module_available(module_name)
     return {
         "id": engine_id,
         "installed": bool(executable or module_available),
@@ -56,9 +60,9 @@ def resolve_command(command: list[str]) -> list[str]:
         return [executable, *command[1:]]
     command_to_engine = {value: key for key, value in ENGINE_EXECUTABLES.items()}
     engine_id = command_to_engine.get(command[0])
-    module_name = ENGINE_MODULES.get(engine_id or "")
-    if module_name and importlib.util.find_spec(module_name) is not None:
-        return [sys.executable, "-m", module_name, *command[1:]]
+    module_name = ENGINE_MODULE_FALLBACKS.get(engine_id or "")
+    if _module_available(module_name):
+        return [sys.executable, "-m", str(module_name), *command[1:]]
     raise EngineRuntimeError(f"engine executable is unavailable: {command[0]}")
 
 
