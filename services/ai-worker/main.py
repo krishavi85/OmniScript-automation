@@ -5,6 +5,8 @@ from typing import Any
 
 import worker
 from authorized_voice_provider import run_authorized_provider
+from engine_registry import public_registry
+from engine_runtime import EngineRuntimeError, execute as execute_engine
 from instrument_renderer import render_instrument
 from mastering_pro import analyze_loudness
 from neural_note_engine import render as render_neural_note
@@ -18,6 +20,27 @@ def required_path(params: dict[str, Any], key: str) -> Path:
     if not value:
         raise worker.RpcError("INVALID_ARGUMENT", f"params.{key} is required")
     return Path(value).expanduser().resolve()
+
+
+def engine_list(_: dict[str, Any]) -> dict[str, Any]:
+    return {"engines": public_registry()}
+
+
+def engine_separate(params: dict[str, Any]) -> dict[str, Any]:
+    def operation(job: worker.Job) -> dict[str, Any]:
+        job.update(progress=0.05, message="Preparing separation engine")
+
+        def run_process(command: list[str]) -> None:
+            worker._run_process(job, command)
+
+        try:
+            result = execute_engine(params, run_process)
+        except (ValueError, EngineRuntimeError) as exc:
+            raise worker.RpcError("ENGINE_ERROR", str(exc)) from exc
+        job.update(progress=0.98, message="Separation complete")
+        return result
+
+    return {"jobId": worker.JOBS.submit("external-engine-separation", operation).id}
 
 
 def spectral_tiles(params: dict[str, Any]) -> dict[str, Any]:
@@ -129,6 +152,8 @@ def voice_transform_authorized(params: dict[str, Any]) -> dict[str, Any]:
 
 
 worker.METHODS.update({
+    "engine.list": engine_list,
+    "engine.separate": engine_separate,
     "spectral.tiles": spectral_tiles,
     "spectral.brush.save": spectral_brush_save,
     "note.resynthesize": note_resynthesize,
