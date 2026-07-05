@@ -1,7 +1,11 @@
+#include "PipelineWorkspace.h"
 #include "StudioServices.h"
 #include "StudioWidgets.h"
 
 namespace omnistem::desktop {
+std::unique_ptr<juce::Component> createEnginePanel(WorkerService&);
+std::unique_ptr<juce::Component> createBenchmarkPanel(WorkerService&);
+
 namespace {
 
 class ModelsWorkspace final : public juce::Component {
@@ -127,10 +131,30 @@ private:
     juce::TextButton installed, install, remove, check;
 };
 
+class ProductionSystems final : public juce::TabbedComponent {
+public:
+    explicit ProductionSystems(WorkerService& worker)
+        : juce::TabbedComponent(juce::TabbedButtonBar::TabsAtTop) {
+        addOwnedTab("Models", std::make_unique<ModelsWorkspace>(worker));
+        addOwnedTab("Pipeline", createPipelineWorkspace(worker));
+        addOwnedTab("Engine Diagnostics", createEnginePanel(worker));
+        addOwnedTab("Benchmark Reports", createBenchmarkPanel(worker));
+    }
+
+private:
+    void addOwnedTab(const juce::String& name, std::unique_ptr<juce::Component> page) {
+        auto* raw = page.get();
+        owned.push_back(std::move(page));
+        addTab(name, juce::Colour::fromRGB(28, 31, 40), raw, false);
+    }
+
+    std::vector<std::unique_ptr<juce::Component>> owned;
+};
+
 } // namespace
 
 std::unique_ptr<juce::Component> createModelsWorkspace(WorkerService& worker) {
-    return std::make_unique<ModelsWorkspace>(worker);
+    return std::make_unique<ProductionSystems>(worker);
 }
 
 } // namespace omnistem::desktop
