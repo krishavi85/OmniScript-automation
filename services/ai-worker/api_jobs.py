@@ -6,6 +6,7 @@ import main as worker_entry
 import model_methods
 import executor_methods
 import plugin_compatibility
+import recording_methods
 from fastapi import APIRouter, HTTPException
 
 
