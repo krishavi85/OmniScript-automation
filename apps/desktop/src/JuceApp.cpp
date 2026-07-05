@@ -5,6 +5,7 @@
 #include "DiagnosticsLogPanel.cpp"
 #include "JobDetailPanel.cpp"
 #include "ModelsWorkspace.cpp"
+#include "EnsemblePanel.cpp"
 
 namespace omnistem::desktop {
 std::unique_ptr<juce::Component> makeDashboardWorkspace(StudioState&, WorkerService&, LogStore&);
@@ -27,6 +28,7 @@ public:
         addAndMakeVisible(tabs);
         addTab("Dashboard", makeDashboardWorkspace(state, worker, logs));
         addTab("Separate", createProcessingPanel(state, worker, audio, formats));
+        addTab("Ensemble", createEnsemblePanel(worker));
         addTab("Batch", createBatchPanel(state, worker));
         addTab("God Mode", createGodPanel(state, worker));
         addTab("Comparison", createComparisonPanel(worker, audio, formats));
