@@ -26,6 +26,9 @@ if(OMNISTEM_BUILD_JUCE_APP)
         src/WorkerApiClient.cpp
         src/StudioServices.cpp
         src/StudioAudioEngine.cpp
+        src/FilePickerWaveform.cpp
+        src/JobStatusJson.cpp
+        src/StemMixerPanel.cpp
     )
     target_link_libraries(OmniStemStudio PRIVATE
         OmniStemCore
