@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -52,13 +53,23 @@ def _write(root: Path, value: dict[str, Any]) -> None:
     temporary.replace(_path(root))
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def list_models(root: Path | None = None) -> list[dict[str, Any]]:
     base = (root or model_root()).resolve()
     rows: list[dict[str, Any]] = []
     for model_id, record in _read(base)["models"].items():
         row = dict(record)
         row["modelId"] = model_id
-        row["present"] = Path(str(row.get("artifact", ""))).is_file()
+        artifact = Path(str(row.get("artifact", "")))
+        row["present"] = artifact.is_file()
+        row["verified"] = artifact.is_file() and _sha256(artifact) == str(row.get("sha256", ""))
         rows.append(row)
     rows.sort(key=lambda row: str(row["modelId"]).casefold())
     return rows
@@ -80,18 +91,23 @@ def register(request: dict[str, Any], root: Path | None = None) -> dict[str, Any
     if not license_id or not license_url:
         raise ModelRegistryError("licenseId and licenseUrl are required")
 
+    actual = _sha256(artifact)
+    if actual != checksum:
+        raise ModelRegistryError(f"Model checksum mismatch: expected {checksum}, received {actual}")
+
     base = (root or model_root()).resolve()
     registry = _read(base)
     record = {
         "version": version,
         "artifact": str(artifact),
-        "sha256": checksum,
+        "sha256": actual,
+        "sizeBytes": artifact.stat().st_size,
         "licenseId": license_id,
         "licenseUrl": license_url,
     }
     registry["models"][model_id] = record
     _write(base, registry)
-    return {"modelId": model_id, **record}
+    return {"modelId": model_id, **record, "verified": True}
 
 
 def update_status(model_id: str, version: str, root: Path | None = None) -> dict[str, Any]:
@@ -103,6 +119,7 @@ def update_status(model_id: str, version: str, root: Path | None = None) -> dict
         "installedVersion": None if current is None else current.get("version"),
         "requestedVersion": requested,
         "updateAvailable": current is None or str(current.get("version")) != requested,
+        "installedVerified": False if current is None else bool(current.get("verified")),
     }
 
 
