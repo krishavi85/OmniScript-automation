@@ -15,3 +15,4 @@ void verifyWorkerApiClientCompiles() {
 #include "EnginePanel.cpp"
 #include "AudioInfoPanel.cpp"
 #include "BenchmarkPanel.cpp"
+#include "PreferencesPanel.cpp"
