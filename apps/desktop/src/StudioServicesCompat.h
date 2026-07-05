@@ -16,5 +16,3 @@ public:
 } // namespace juce
 
 #define ApplicationProperties OmniStemApplicationProperties
-#include "StudioServices.h"
-#undef ApplicationProperties
