@@ -4,6 +4,7 @@
 #include "StudioWidgets.h"
 #include "DiagnosticsLogPanel.cpp"
 #include "JobDetailPanel.cpp"
+#include "ModelsWorkspace.cpp"
 
 namespace omnistem::desktop {
 std::unique_ptr<juce::Component> makeDashboardWorkspace(StudioState&, WorkerService&, LogStore&);
@@ -29,6 +30,7 @@ public:
         addTab("Batch", createBatchPanel(state, worker));
         addTab("God Mode", createGodPanel(state, worker));
         addTab("Comparison", createComparisonPanel(worker, audio, formats));
+        addTab("Models", createModelsWorkspace(worker));
         addTab("Audio Inspector", createAudioInfoPanel(state, audio, formats));
         addTab("Stem Mixer", std::make_unique<StemMixerPanel>(audio));
         addTab("History", createJobDetailPanel(worker));
