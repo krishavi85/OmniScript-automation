@@ -8,6 +8,7 @@ std::unique_ptr<juce::Component> makeDashboardWorkspace(StudioState&, WorkerServ
 std::unique_ptr<juce::Component> createProcessingPanel(StudioState&, WorkerService&,
                                                        StudioAudioEngine&, juce::AudioFormatManager&);
 std::unique_ptr<juce::Component> createBatchPanel(StudioState&, WorkerService&);
+std::unique_ptr<juce::Component> createGodPanel(StudioState&, WorkerService&);
 
 namespace {
 class Shell final : public juce::AudioAppComponent {
@@ -19,6 +20,7 @@ public:
         addTab("Dashboard", makeDashboardWorkspace(state, worker, logs));
         addTab("Separate", createProcessingPanel(state, worker, audio, formats));
         addTab("Batch", createBatchPanel(state, worker));
+        addTab("God Mode", createGodPanel(state, worker));
         setAudioChannels(0, 2);
         setSize(1440, 880);
     }
