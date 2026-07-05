@@ -1,8 +1,8 @@
 void FrequencyPaintCanvas::mouseUp(const juce::MouseEvent& event) {
     dragEnd = event.position;
     dragging = false;
-    const auto region = normalizedDrag();
-    if (region.getWidth() > 0.002f && region.getHeight() > 0.002f)
+    auto region = juce::Rectangle<float>(dragStart, dragEnd);
+    if (region.getWidth() > 2.0f && region.getHeight() > 2.0f)
         painted.push_back({region, gain});
     repaint();
 }
