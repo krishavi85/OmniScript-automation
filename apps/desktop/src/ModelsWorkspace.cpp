@@ -3,6 +3,7 @@
 #include "StudioWidgets.h"
 #include "EnginePanel.cpp"
 #include "BenchmarkPanel.cpp"
+#include "NoteEditorWorkspace.cpp"
 
 namespace omnistem::desktop {
 namespace {
@@ -138,6 +139,7 @@ public:
         addOwnedTab("Pipeline", createPipelineWorkspace(worker));
         addOwnedTab("Engine Diagnostics", createEnginePanel(worker));
         addOwnedTab("Benchmark Reports", createBenchmarkPanel(worker));
+        addOwnedTab("Note Editor", createNoteEditorWorkspace(worker));
     }
 
 private:
