@@ -2,6 +2,7 @@
 #include "StudioAudioEngine.h"
 #include "StudioServices.h"
 #include "StudioWidgets.h"
+#include "DiagnosticsLogPanel.cpp"
 
 namespace omnistem::desktop {
 std::unique_ptr<juce::Component> makeDashboardWorkspace(StudioState&, WorkerService&, LogStore&);
@@ -24,6 +25,7 @@ public:
         addTab("Batch", createBatchPanel(state, worker));
         addTab("God Mode", createGodPanel(state, worker));
         addTab("Comparison", createComparisonPanel(worker, audio, formats));
+        addTab("Logs", createDiagnosticsLogPanel(logs));
         setAudioChannels(0, 2);
         setSize(1440, 880);
     }
