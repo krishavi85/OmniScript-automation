@@ -212,11 +212,18 @@ def mode_run(params: dict[str, Any]) -> dict[str, Any]:
                     raise worker.RpcError("BENCHMARK_REFERENCE_MISSING", "God Mode benchmark requires fused stems")
                 benchmark_result = {"consensus": _consensus_scores(run_results, fusion_result["stems"])}
 
+        final_stems: dict[str, str] = {}
+        if fusion_result is not None:
+            final_stems = dict(fusion_result.get("stems") or {})
+        elif run_results:
+            final_stems = dict(next(reversed(run_results.values())).get("stems") or {})
+
         return {
             "mode": plan["mode"],
             "source": str(source),
             "outputDir": str(output_root),
             "plan": plan,
+            "stems": final_stems,
             "runs": run_results,
             "fusion": fusion_result,
             "benchmark": benchmark_result,
