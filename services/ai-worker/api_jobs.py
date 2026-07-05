@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import main as worker_entry
+import model_methods
 from fastapi import APIRouter, HTTPException
 
 
