@@ -5,6 +5,7 @@ from typing import Any
 import main as worker_entry
 import model_methods
 import executor_methods
+import plugin_compatibility
 from fastapi import APIRouter, HTTPException
 
 
