@@ -1,4 +1,5 @@
-#include <clap/clap.h>
+#include "ClapRuntime.h"
+
 #include <iostream>
 
 int main(int argc, char** argv) {
