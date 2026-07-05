@@ -11,3 +11,5 @@ void verifyWorkerApiClientCompiles() {
 
 #include "BatchPanel.cpp"
 #include "GodPanel.cpp"
+#include "ComparisonPanel.cpp"
+#include "EnginePanel.cpp"
