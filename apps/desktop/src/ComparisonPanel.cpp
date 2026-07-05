@@ -2,6 +2,8 @@
 #include "StudioServices.h"
 #include "StudioWidgets.h"
 
+#include <array>
+
 namespace omnistem::desktop {
 namespace {
 
@@ -48,9 +50,11 @@ public:
             result.setValue(snapshot.payload);
         };
 
-        for (juce::Component* component : {static_cast<juce::Component*>(&heading), &fileA, &fileB,
-                                           &reference, &useA, &useB, &play, &stop, &benchmark,
-                                           &position, &waveformA, &waveformB, &job, &result})
+        const std::array<juce::Component*, 14> components{
+            &heading, &fileA, &fileB, &reference, &useA, &useB, &play,
+            &stop, &benchmark, &position, &waveformA, &waveformB, &job, &result
+        };
+        for (auto* component : components)
             addAndMakeVisible(component);
         startTimerHz(20);
     }
