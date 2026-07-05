@@ -33,6 +33,7 @@ if(OMNISTEM_BUILD_JUCE_APP)
         src/ProcessingPanel.cpp
         src/StemResultLoader.cpp
         src/PipelineWorkspace.cpp
+        src/ResultHooks.cpp
     )
     target_link_libraries(OmniStemStudio PRIVATE
         OmniStemCore
