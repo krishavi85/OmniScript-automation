@@ -13,6 +13,8 @@ std::unique_ptr<juce::Component> createBatchPanel(StudioState&, WorkerService&);
 std::unique_ptr<juce::Component> createGodPanel(StudioState&, WorkerService&);
 std::unique_ptr<juce::Component> createComparisonPanel(WorkerService&, StudioAudioEngine&,
                                                        juce::AudioFormatManager&);
+std::unique_ptr<juce::Component> createAudioInfoPanel(StudioState&, StudioAudioEngine&,
+                                                      juce::AudioFormatManager&);
 
 namespace {
 class Shell final : public juce::AudioAppComponent {
@@ -26,6 +28,7 @@ public:
         addTab("Batch", createBatchPanel(state, worker));
         addTab("God Mode", createGodPanel(state, worker));
         addTab("Comparison", createComparisonPanel(worker, audio, formats));
+        addTab("Audio Inspector", createAudioInfoPanel(state, audio, formats));
         addTab("History", createJobDetailPanel(worker));
         addTab("Logs", createDiagnosticsLogPanel(logs));
         setAudioChannels(0, 2);
