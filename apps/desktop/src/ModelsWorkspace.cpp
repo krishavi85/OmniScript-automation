@@ -4,6 +4,8 @@
 #include "EnginePanel.cpp"
 #include "BenchmarkPanel.cpp"
 #include "NoteEditorWorkspace.cpp"
+#include "FrequencyCanvasRuntime.cpp"
+#include "FrequencyWorkflow.cpp"
 
 namespace omnistem::desktop {
 namespace {
@@ -140,6 +142,7 @@ public:
         addOwnedTab("Engine Diagnostics", createEnginePanel(worker));
         addOwnedTab("Benchmark Reports", createBenchmarkPanel(worker));
         addOwnedTab("Note Editor", createNoteEditorWorkspace(worker));
+        addOwnedTab("Spectral Paint", createFrequencyPaintWorkspace(worker));
     }
 
 private:
