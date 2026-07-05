@@ -13,3 +13,4 @@ void verifyWorkerApiClientCompiles() {
 #include "GodPanel.cpp"
 #include "ComparisonPanel.cpp"
 #include "EnginePanel.cpp"
+#include "AudioInfoPanel.cpp"
