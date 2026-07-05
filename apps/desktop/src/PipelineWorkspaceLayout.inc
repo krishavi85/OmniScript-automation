@@ -46,3 +46,11 @@ void PipelineWorkspace::resized() {
     job.setBounds(area.removeFromTop(58));
     result.setBounds(area.reduced(0, 4));
 }
+
+void PipelineWorkspace::resetDefinition() {
+    stepCount = 0;
+    auto* root = new juce::DynamicObject();
+    root->setProperty("name", "Pipeline");
+    root->setProperty("steps", juce::var(juce::Array<juce::var>()));
+    definition.setText(juce::JSON::toString(juce::var(root), true));
+}
