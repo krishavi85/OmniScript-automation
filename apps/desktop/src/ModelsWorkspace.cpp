@@ -1,11 +1,10 @@
 #include "PipelineWorkspace.h"
 #include "StudioServices.h"
 #include "StudioWidgets.h"
+#include "EnginePanel.cpp"
+#include "BenchmarkPanel.cpp"
 
 namespace omnistem::desktop {
-std::unique_ptr<juce::Component> createEnginePanel(WorkerService&);
-std::unique_ptr<juce::Component> createBenchmarkPanel(WorkerService&);
-
 namespace {
 
 class ModelsWorkspace final : public juce::Component {
