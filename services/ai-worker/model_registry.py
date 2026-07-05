@@ -63,6 +63,14 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _inside(path: Path, directory: Path) -> bool:
+    try:
+        path.resolve().relative_to(directory.resolve())
+        return True
+    except ValueError:
+        return False
+
+
 def list_models(root: Path | None = None) -> list[dict[str, Any]]:
     base = (root or model_root()).resolve()
     rows: list[dict[str, Any]] = []
@@ -145,8 +153,30 @@ def unregister(model_id: str, root: Path | None = None) -> dict[str, Any]:
     safe_id = _clean(model_id, "modelId")
     base = (root or model_root()).resolve()
     registry = _read(base)
-    if safe_id not in registry["models"]:
+    record = registry["models"].get(safe_id)
+    if not isinstance(record, dict):
         raise ModelRegistryError(f"Model is not registered: {safe_id}")
+
+    artifact = Path(str(record.get("artifact", "")))
+    managed_root = base / safe_id
+    artifact_deleted = False
+    if bool(record.get("managed")) and artifact.is_file() and _inside(artifact, managed_root):
+        artifact.unlink()
+        artifact_deleted = True
+        current = artifact.parent
+        while current != base and _inside(current, managed_root):
+            try:
+                current.rmdir()
+            except OSError:
+                break
+            if current == managed_root:
+                break
+            current = current.parent
+
     registry["models"].pop(safe_id)
     _write(base, registry)
-    return {"modelId": safe_id, "removedFromRegistry": True}
+    return {
+        "modelId": safe_id,
+        "removedFromRegistry": True,
+        "artifactDeleted": artifact_deleted,
+    }
