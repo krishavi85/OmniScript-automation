@@ -1,4 +1,5 @@
 #include "StudioWidgets.h"
+#include "ResultHooks.h"
 
 namespace omnistem::desktop {
 
@@ -93,6 +94,7 @@ JsonResultView::JsonResultView() {
 }
 
 void JsonResultView::setValue(const juce::var& value) {
+    notifyResultHook(value);
     editor.setText(juce::JSON::toString(value, true), false);
 }
 
