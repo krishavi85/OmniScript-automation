@@ -8,3 +8,6 @@ void verifyWorkerApiClientCompiles() {
 }
 
 } // namespace omnistem::desktop
+
+#include "BatchPanel.cpp"
+#include "GodPanel.cpp"
