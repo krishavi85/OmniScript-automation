@@ -54,3 +54,26 @@ void PipelineWorkspace::resetDefinition() {
     root->setProperty("steps", juce::var(juce::Array<juce::var>()));
     definition.setText(juce::JSON::toString(juce::var(root), true));
 }
+
+void PipelineWorkspace::appendStep() {
+    static const juce::StringArray allowed{
+        "mode.run", "transcription.run", "restoration.run",
+        "mastering.run", "spectral.mask", "instrument.render"
+    };
+    const auto selected = palette.getSelectedItemIndex();
+    if (!juce::isPositiveAndBelow(selected, allowed.size())) return;
+    auto pipeline = juce::JSON::parse(definition.getText());
+    auto* root = pipeline.getDynamicObject();
+    auto* steps = root != nullptr ? root->getProperty("steps").getArray() : nullptr;
+    if (steps == nullptr) {
+        status.setText("Definition requires a valid steps array", juce::dontSendNotification);
+        return;
+    }
+    auto* step = new juce::DynamicObject();
+    step->setProperty("id", "step-" + juce::String(++stepCount));
+    step->setProperty("method", allowed[selected]);
+    step->setProperty("params", juce::var(new juce::DynamicObject()));
+    step->setProperty("dependsOn", juce::var(juce::Array<juce::var>()));
+    steps->add(juce::var(step));
+    definition.setText(juce::JSON::toString(pipeline, true));
+}
