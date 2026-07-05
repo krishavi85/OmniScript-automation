@@ -15,6 +15,7 @@ std::unique_ptr<juce::Component> createComparisonPanel(WorkerService&, StudioAud
                                                        juce::AudioFormatManager&);
 std::unique_ptr<juce::Component> createAudioInfoPanel(StudioState&, StudioAudioEngine&,
                                                       juce::AudioFormatManager&);
+std::unique_ptr<juce::Component> createPreferencesPanel(StudioState&, WorkerService&);
 
 namespace {
 class Shell final : public juce::AudioAppComponent {
@@ -31,6 +32,7 @@ public:
         addTab("Audio Inspector", createAudioInfoPanel(state, audio, formats));
         addTab("History", createJobDetailPanel(worker));
         addTab("Logs", createDiagnosticsLogPanel(logs));
+        addTab("Settings", createPreferencesPanel(state, worker));
         setAudioChannels(0, 2);
         setSize(1440, 880);
     }
