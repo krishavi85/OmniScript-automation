@@ -6,13 +6,8 @@ void FrequencyPaintCanvas::paint(juce::Graphics& graphics) {
 
     graphics.setColour(juce::Colours::cyan.withAlpha(0.35f));
     for (const auto& mask : painted) {
-        const juce::Rectangle<float> region(
-            bounds.getX() + mask.normalized.getX() * bounds.getWidth(),
-            bounds.getY() + mask.normalized.getY() * bounds.getHeight(),
-            mask.normalized.getWidth() * bounds.getWidth(),
-            mask.normalized.getHeight() * bounds.getHeight());
-        graphics.fillRect(region);
-        graphics.drawRect(region, 1.0f);
+        graphics.fillRect(mask.normalized);
+        graphics.drawRect(mask.normalized, 1.0f);
     }
 
     if (dragging) {
