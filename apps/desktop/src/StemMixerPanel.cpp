@@ -1,4 +1,5 @@
 #include "StudioWidgets.h"
+#include "ResultHooks.h"
 
 #include <algorithm>
 
@@ -66,10 +67,29 @@ StemMixerPanel::StemMixerPanel(StudioAudioEngine& engine) : audioEngine(engine) 
     viewport.setScrollBarsShown(true, false);
     addAndMakeVisible(viewport);
     audioEngine.addChangeListener(this);
+    setResultHook([this](const juce::var& value) {
+        auto* root = value.getDynamicObject();
+        auto* stems = root != nullptr ? root->getProperty("stems").getDynamicObject() : nullptr;
+        if (stems == nullptr)
+            return;
+        audioEngine.clearStems();
+        const auto& values = stems->getProperties();
+        for (int index = 0; index < values.size(); ++index) {
+            const auto name = values.getName(index).toString();
+            const juce::File file(values.getValueAt(index).toString());
+            if (!file.existsAsFile())
+                continue;
+            juce::String error;
+            audioEngine.addStem(name, name, file, error);
+        }
+        if (!audioEngine.stemMix().empty())
+            audioEngine.setMode(StudioAudioEngine::Mode::stemMixer);
+    });
     refresh();
 }
 
 StemMixerPanel::~StemMixerPanel() {
+    clearResultHook();
     audioEngine.removeChangeListener(this);
     viewport.setViewedComponent(nullptr, false);
 }
