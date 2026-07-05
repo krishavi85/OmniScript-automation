@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -35,7 +36,7 @@ def _path(root: Path) -> Path:
 def _read(root: Path) -> dict[str, Any]:
     path = _path(root)
     if not path.exists():
-        return {"schemaVersion": 1, "models": {}}
+        return {"schemaVersion": 2, "models": {}}
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -47,6 +48,7 @@ def _read(root: Path) -> dict[str, Any]:
 
 def _write(root: Path, value: dict[str, Any]) -> None:
     root.mkdir(parents=True, exist_ok=True)
+    value["schemaVersion"] = 2
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=root, delete=False) as handle:
         json.dump(value, handle, indent=2, sort_keys=True)
         temporary = Path(handle.name)
@@ -78,30 +80,46 @@ def list_models(root: Path | None = None) -> list[dict[str, Any]]:
 def register(request: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
     model_id = _clean(str(request.get("modelId", "")), "modelId")
     version = _clean(str(request.get("version", "")), "version")
-    artifact = Path(str(request.get("artifact", ""))).expanduser().resolve()
+    source = Path(str(request.get("artifact", ""))).expanduser().resolve()
     checksum = str(request.get("sha256", "")).strip().lower()
     license_id = str(request.get("licenseId", "")).strip()
     license_url = str(request.get("licenseUrl", "")).strip()
     if not request.get("licenseAccepted", False):
         raise ModelRegistryError("License acceptance is required")
-    if not artifact.is_file():
+    if not source.is_file():
         raise ModelRegistryError("Model artifact does not exist")
     if len(checksum) != 64 or any(char not in "0123456789abcdef" for char in checksum):
         raise ModelRegistryError("sha256 must contain 64 hexadecimal characters")
     if not license_id or not license_url:
         raise ModelRegistryError("licenseId and licenseUrl are required")
 
-    actual = _sha256(artifact)
+    actual = _sha256(source)
     if actual != checksum:
         raise ModelRegistryError(f"Model checksum mismatch: expected {checksum}, received {actual}")
 
     base = (root or model_root()).resolve()
+    destination_dir = base / model_id / version
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    destination = destination_dir / _clean(source.name, "artifact filename")
+    if source != destination:
+        with tempfile.NamedTemporaryFile(dir=destination_dir, delete=False) as handle:
+            temporary = Path(handle.name)
+        try:
+            shutil.copy2(source, temporary)
+            if _sha256(temporary) != checksum:
+                raise ModelRegistryError("Managed artifact verification failed after copy")
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+
     registry = _read(base)
     record = {
         "version": version,
-        "artifact": str(artifact),
+        "artifact": str(destination),
+        "sourceArtifact": str(source),
         "sha256": actual,
-        "sizeBytes": artifact.stat().st_size,
+        "sizeBytes": destination.stat().st_size,
+        "managed": True,
         "licenseId": license_id,
         "licenseUrl": license_url,
     }
