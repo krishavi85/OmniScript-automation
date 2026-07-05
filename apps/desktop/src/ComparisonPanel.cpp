@@ -48,9 +48,9 @@ public:
             result.setValue(snapshot.payload);
         };
 
-        for (auto* component : {static_cast<juce::Component*>(&heading), &fileA, &fileB,
-                                &reference, &useA, &useB, &play, &stop, &benchmark,
-                                &position, &waveformA, &waveformB, &job, &result})
+        for (juce::Component* component : {static_cast<juce::Component*>(&heading), &fileA, &fileB,
+                                           &reference, &useA, &useB, &play, &stop, &benchmark,
+                                           &position, &waveformA, &waveformB, &job, &result})
             addAndMakeVisible(component);
         startTimerHz(20);
     }
