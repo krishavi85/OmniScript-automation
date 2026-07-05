@@ -1,5 +1,6 @@
 #pragma once
 
+#include "StudioServicesCompat.h"
 #include "WorkerApiClient.h"
 #include "omnistem/core/OmniStemCore.h"
 
