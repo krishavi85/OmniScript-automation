@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "modelId": "demucs-cpp-htdemucs-4s-f16",
+  "displayName": "HTDemucs 4-Stem F16 for demucs.cpp",
+  "version": "4-f16",
+  "engine": "demucs.cpp",
+  "architecture": "HTDemucs",
+  "format": "ggml-f16",
+  "fileName": "ggml-model-htdemucs-4s-f16.bin",
+  "sourceUrl": "https://huggingface.co/datasets/Retrobear/demucs.cpp/resolve/main/ggml-model-htdemucs-4s-f16.bin?download=true",
+  "sha256": "72b17c42d308982ddb5069bc3bf48b81a5aac4cb6516e4366c0fa7cef6df0064",
+  "stems": [
+    "vocals",
+    "drums",
+    "bass",
+    "other"
+  ],
+  "licenseId": "upstream-review-required",
+  "licenseUrl": "https://huggingface.co/datasets/Retrobear/demucs.cpp/blob/main/README.md",
+  "requiresExplicitLicenseAcceptance": true,
+  "redistributionApproved": false,
+  "notes": "The artifact checksum is pinned. Review the upstream Demucs and converted-weight terms before commercial use or redistribution."
+}
