@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -57,6 +61,8 @@ jobs:
         run: python -m unittest discover -s services/ai-worker/tests -v
       - name: Protocol smoke test
         run: echo '{"id":"ci","method":"health.check","params":{}}' | python services/ai-worker/main.py
+      - name: Canonical CLI dry-run
+        run: python services/ai-worker/studio_cli.py --json models --engine demucs --current-only
 
   python-production-audio:
     runs-on: ubuntu-latest
@@ -69,6 +75,22 @@ jobs:
         run: python -m pip install -r services/ai-worker/requirements-production.txt
       - name: Run worker and production audio tests
         run: python -m unittest discover -s services/ai-worker/tests -v
+
+  python-local-api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install API dependencies
+        run: python -m pip install -r services/ai-worker/requirements-api.txt
+      - name: Compile API modules
+        run: python -m compileall services/ai-worker
+      - name: Run API tests
+        run: python -m unittest discover -s services/ai-worker/tests -p 'test_api_app.py' -v
+      - name: CLI doctor smoke test
+        run: python services/ai-worker/studio_cli.py --json doctor
 
   juce-windows:
     runs-on: windows-latest

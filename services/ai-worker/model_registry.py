@@ -1,0 +1,182 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import shutil
+import tempfile
+from pathlib import Path
+from typing import Any
+
+
+class ModelRegistryError(ValueError):
+    pass
+
+
+_SAFE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def model_root() -> Path:
+    configured = os.environ.get("OMNISTEM_MODEL_DIR", "").strip()
+    return Path(configured).expanduser().resolve() if configured else Path.home() / ".omnistem" / "models"
+
+
+def _clean(value: str, label: str) -> str:
+    value = value.strip()
+    if not _SAFE.fullmatch(value):
+        raise ModelRegistryError(f"Invalid {label}")
+    return value
+
+
+def _path(root: Path) -> Path:
+    return root / "registry.json"
+
+
+def _read(root: Path) -> dict[str, Any]:
+    path = _path(root)
+    if not path.exists():
+        return {"schemaVersion": 2, "models": {}}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ModelRegistryError(f"Could not read registry: {exc}") from exc
+    if not isinstance(value, dict) or not isinstance(value.get("models"), dict):
+        raise ModelRegistryError("Invalid model registry")
+    return value
+
+
+def _write(root: Path, value: dict[str, Any]) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    value["schemaVersion"] = 2
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=root, delete=False) as handle:
+        json.dump(value, handle, indent=2, sort_keys=True)
+        temporary = Path(handle.name)
+    temporary.replace(_path(root))
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _inside(path: Path, directory: Path) -> bool:
+    try:
+        path.resolve().relative_to(directory.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def list_models(root: Path | None = None) -> list[dict[str, Any]]:
+    base = (root or model_root()).resolve()
+    rows: list[dict[str, Any]] = []
+    for model_id, record in _read(base)["models"].items():
+        row = dict(record)
+        row["modelId"] = model_id
+        artifact = Path(str(row.get("artifact", "")))
+        row["present"] = artifact.is_file()
+        row["verified"] = artifact.is_file() and _sha256(artifact) == str(row.get("sha256", ""))
+        rows.append(row)
+    rows.sort(key=lambda row: str(row["modelId"]).casefold())
+    return rows
+
+
+def register(request: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
+    model_id = _clean(str(request.get("modelId", "")), "modelId")
+    version = _clean(str(request.get("version", "")), "version")
+    source = Path(str(request.get("artifact", ""))).expanduser().resolve()
+    checksum = str(request.get("sha256", "")).strip().lower()
+    license_id = str(request.get("licenseId", "")).strip()
+    license_url = str(request.get("licenseUrl", "")).strip()
+    if not request.get("licenseAccepted", False):
+        raise ModelRegistryError("License acceptance is required")
+    if not source.is_file():
+        raise ModelRegistryError("Model artifact does not exist")
+    if len(checksum) != 64 or any(char not in "0123456789abcdef" for char in checksum):
+        raise ModelRegistryError("sha256 must contain 64 hexadecimal characters")
+    if not license_id or not license_url:
+        raise ModelRegistryError("licenseId and licenseUrl are required")
+
+    actual = _sha256(source)
+    if actual != checksum:
+        raise ModelRegistryError(f"Model checksum mismatch: expected {checksum}, received {actual}")
+
+    base = (root or model_root()).resolve()
+    destination_dir = base / model_id / version
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    destination = destination_dir / _clean(source.name, "artifact filename")
+    if source != destination:
+        with tempfile.NamedTemporaryFile(dir=destination_dir, delete=False) as handle:
+            temporary = Path(handle.name)
+        try:
+            shutil.copy2(source, temporary)
+            if _sha256(temporary) != checksum:
+                raise ModelRegistryError("Managed artifact verification failed after copy")
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    registry = _read(base)
+    record = {
+        "version": version,
+        "artifact": str(destination),
+        "sourceArtifact": str(source),
+        "sha256": actual,
+        "sizeBytes": destination.stat().st_size,
+        "managed": True,
+        "licenseId": license_id,
+        "licenseUrl": license_url,
+    }
+    registry["models"][model_id] = record
+    _write(base, registry)
+    return {"modelId": model_id, **record, "verified": True}
+
+
+def update_status(model_id: str, version: str, root: Path | None = None) -> dict[str, Any]:
+    safe_id = _clean(model_id, "modelId")
+    requested = _clean(version, "version")
+    current = next((row for row in list_models(root) if row["modelId"] == safe_id), None)
+    return {
+        "modelId": safe_id,
+        "installedVersion": None if current is None else current.get("version"),
+        "requestedVersion": requested,
+        "updateAvailable": current is None or str(current.get("version")) != requested,
+        "installedVerified": False if current is None else bool(current.get("verified")),
+    }
+
+
+def unregister(model_id: str, root: Path | None = None) -> dict[str, Any]:
+    safe_id = _clean(model_id, "modelId")
+    base = (root or model_root()).resolve()
+    registry = _read(base)
+    record = registry["models"].get(safe_id)
+    if not isinstance(record, dict):
+        raise ModelRegistryError(f"Model is not registered: {safe_id}")
+
+    artifact = Path(str(record.get("artifact", "")))
+    managed_root = base / safe_id
+    artifact_deleted = False
+    if bool(record.get("managed")) and artifact.is_file() and _inside(artifact, managed_root):
+        artifact.unlink()
+        artifact_deleted = True
+        current = artifact.parent
+        while current != base and _inside(current, managed_root):
+            try:
+                current.rmdir()
+            except OSError:
+                break
+            if current == managed_root:
+                break
+            current = current.parent
+
+    registry["models"].pop(safe_id)
+    _write(base, registry)
+    return {
+        "modelId": safe_id,
+        "removedFromRegistry": True,
+        "artifactDeleted": artifact_deleted,
+    }

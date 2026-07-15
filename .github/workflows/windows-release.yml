@@ -1,0 +1,106 @@
+name: Windows Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        required: true
+        description: Release version
+        type: string
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
+      CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: juce-framework/JUCE
+          ref: 8.0.8
+          path: external/JUCE
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          $value = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.version }}" } else { "${{ github.ref_name }}".TrimStart("v") }
+          if ($value -notmatch '^\d+\.\d+\.\d+') { throw "Invalid version" }
+          "value=$value" >> $env:GITHUB_OUTPUT
+
+      - name: Build application
+        shell: pwsh
+        run: |
+          cmake -S . -B build-release -DOMNISTEM_BUILD_JUCE_APP=ON -DOMNISTEM_ENABLE_ASIO=OFF -DOMNISTEM_JUCE_SOURCE_DIR="${{ github.workspace }}/external/JUCE"
+          cmake --build build-release --config Release --target OmniStemStudio --parallel 2
+
+      - name: Build worker
+        shell: pwsh
+        run: |
+          python -m pip install -r services/ai-worker/requirements-api.txt pyinstaller
+          pyinstaller --noconfirm --onefile --name OmniStemWorker --paths services/ai-worker services/ai-worker/serve_local.py
+
+      - name: Stage files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force stage, dist | Out-Null
+          $app = Get-ChildItem build-release -Recurse -Filter "OmniStem Studio.exe" | Select-Object -First 1
+          if (-not $app) { throw "Application executable not found" }
+          Copy-Item $app.FullName "stage/OmniStem Studio.exe"
+          Copy-Item "dist/OmniStemWorker.exe" "stage/OmniStemWorker.exe"
+
+      - name: Sign binaries
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:CERT_BASE64) -or [string]::IsNullOrWhiteSpace($env:CERT_PASSWORD)) { throw "Signing secrets are required" }
+          [IO.File]::WriteAllBytes("certificate.pfx", [Convert]::FromBase64String($env:CERT_BASE64))
+          $tool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Where-Object FullName -match x64 | Select-Object -First 1
+          foreach ($file in Get-ChildItem stage -Filter *.exe) {
+            & $tool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f certificate.pfx /p $env:CERT_PASSWORD $file.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Signing failed" }
+            & $tool.FullName verify /pa $file.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Signature verification failed" }
+          }
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $manifest = Get-ChildItem stage -File | ForEach-Object { [ordered]@{ name=$_.Name; size=$_.Length; sha256=(Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() } }
+          [ordered]@{ schemaVersion=1; version="${{ steps.version.outputs.value }}"; commit="${{ github.sha }}"; files=@($manifest) } | ConvertTo-Json -Depth 5 | Set-Content stage/release-manifest.json
+          choco install innosetup --yes --no-progress
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=${{ steps.version.outputs.value }}" "/DStageDir=${{ github.workspace }}\stage" "/DOutputDir=${{ github.workspace }}\dist" packaging/windows/OmniStemStudio.iss
+          if ($LASTEXITCODE -ne 0) { throw "Installer build failed" }
+          $setup = Get-ChildItem dist -Filter *-Setup.exe | Select-Object -First 1
+          $tool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Where-Object FullName -match x64 | Select-Object -First 1
+          & $tool.FullName sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f certificate.pfx /p $env:CERT_PASSWORD $setup.FullName
+          & $tool.FullName verify /pa $setup.FullName
+          if ($LASTEXITCODE -ne 0) { throw "Installer signature verification failed" }
+          Compress-Archive stage/* "dist/OmniStem-Studio-${{ steps.version.outputs.value }}-Rollback.zip" -Force
+          Copy-Item stage/release-manifest.json dist/
+
+      - name: Validate deployment
+        shell: pwsh
+        run: .\packaging\windows\Validate-Deployment.ps1 -Installer (Get-ChildItem dist -Filter *-Setup.exe | Select-Object -First 1).FullName
+
+      - name: Clean certificate
+        if: always()
+        shell: pwsh
+        run: Remove-Item certificate.pfx -Force -ErrorAction SilentlyContinue
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OmniStem-Studio-${{ steps.version.outputs.value }}-Windows
+          path: |
+            dist/*-Setup.exe
+            dist/*-Rollback.zip
+            dist/release-manifest.json

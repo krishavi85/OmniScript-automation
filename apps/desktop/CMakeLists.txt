@@ -21,7 +21,20 @@ if(OMNISTEM_BUILD_JUCE_APP)
     )
 
     juce_generate_juce_header(OmniStemStudio)
-    target_sources(OmniStemStudio PRIVATE src/JuceApp.cpp)
+    target_sources(OmniStemStudio PRIVATE
+        src/JuceApp.cpp
+        src/WorkerApiClient.cpp
+        src/StudioServices.cpp
+        src/StudioAudioEngine.cpp
+        src/FilePickerWaveform.cpp
+        src/JobStatusJson.cpp
+        src/StemMixerPanel.cpp
+        src/DashboardWorkspace.cpp
+        src/ProcessingPanel.cpp
+        src/StemResultLoader.cpp
+        src/PipelineWorkspace.cpp
+        src/ResultHooks.cpp
+    )
     target_link_libraries(OmniStemStudio PRIVATE
         OmniStemCore
         juce::juce_audio_utils

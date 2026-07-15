@@ -2,22 +2,12 @@
 #include "StudioAudioEngine.h"
 #include "StudioServices.h"
 #include "StudioWidgets.h"
-#include "DiagnosticsLogPanel.cpp"
-#include "JobDetailPanel.cpp"
-#include "ModelsWorkspace.cpp"
-#include "EnsemblePanel.cpp"
 
 namespace omnistem::desktop {
 std::unique_ptr<juce::Component> makeDashboardWorkspace(StudioState&, WorkerService&, LogStore&);
 std::unique_ptr<juce::Component> createProcessingPanel(StudioState&, WorkerService&,
                                                        StudioAudioEngine&, juce::AudioFormatManager&);
 std::unique_ptr<juce::Component> createBatchPanel(StudioState&, WorkerService&);
-std::unique_ptr<juce::Component> createGodPanel(StudioState&, WorkerService&);
-std::unique_ptr<juce::Component> createComparisonPanel(WorkerService&, StudioAudioEngine&,
-                                                       juce::AudioFormatManager&);
-std::unique_ptr<juce::Component> createAudioInfoPanel(StudioState&, StudioAudioEngine&,
-                                                      juce::AudioFormatManager&);
-std::unique_ptr<juce::Component> createPreferencesPanel(StudioState&, WorkerService&);
 
 namespace {
 class Shell final : public juce::AudioAppComponent {
@@ -28,16 +18,7 @@ public:
         addAndMakeVisible(tabs);
         addTab("Dashboard", makeDashboardWorkspace(state, worker, logs));
         addTab("Separate", createProcessingPanel(state, worker, audio, formats));
-        addTab("Ensemble", createEnsemblePanel(worker));
         addTab("Batch", createBatchPanel(state, worker));
-        addTab("God Mode", createGodPanel(state, worker));
-        addTab("Comparison", createComparisonPanel(worker, audio, formats));
-        addTab("Models", createModelsWorkspace(worker));
-        addTab("Audio Inspector", createAudioInfoPanel(state, audio, formats));
-        addTab("Stem Mixer", std::make_unique<StemMixerPanel>(audio));
-        addTab("History", createJobDetailPanel(worker));
-        addTab("Logs", createDiagnosticsLogPanel(logs));
-        addTab("Settings", createPreferencesPanel(state, worker));
         setAudioChannels(0, 2);
         setSize(1440, 880);
     }
